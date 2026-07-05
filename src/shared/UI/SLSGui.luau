@@ -9,6 +9,7 @@ local GUIs = ReplicatedStorage:WaitForChild("GUIs")
 local ShopUI = require(ReplicatedStorage.ShopClient.UI.Shop)
 local LoadoutUI = require(ReplicatedStorage.ShopClient.UI.Loadout)
 local StatsUI = require(ReplicatedStorage.ShopClient.UI.Stats)
+local AdaptiveMusic = require(ReplicatedStorage.AdaptiveMusic.AdaptiveSong)
 
 local SLSGui = {}
 SLSGui.__index = SLSGui
@@ -144,6 +145,8 @@ function SLSGui.new(options: SLSGuiOptions?)
 	self.sounds = {}
 	self.main.OptionsMain.Position = UDim2.new(0.5, 0, -2, 0)
 
+	self.song = AdaptiveMusic.new("RunningOnDeadTime", false)
+
 	self.shop = ShopUI.new(self.shopModelName, {
 		gui = self.shopMain,
 		autoStart = false,
@@ -169,9 +172,24 @@ function SLSGui.new(options: SLSGuiOptions?)
 	self:LoadSounds()
 
 	self:bindButton(self.optionsMain, "Loadout", function()
+		local fadeTime = (120 / self.song.conductor.bpm) * 2
+		self.song:ScheduleFadeInSections(2, "Leads", 0, fadeTime)
+		self.song:ScheduleFadeInSections(2, "Chords", 0, fadeTime)
+		self.song:ScheduleFadeInSections(2, "Backing", 0, fadeTime)
+		self.song:ScheduleFadeInSections(2, "Bassline", 0.3, fadeTime)
+		self.song:ScheduleFadeInSections(2, "Percussion", 0.5, fadeTime)
+
 		self:SetState("Loadout")
 	end)
+
 	self:bindButton(self.optionsMain, "Shop", function()
+		local fadeTime = (120 / self.song.conductor.bpm) * 2
+		self.song:ScheduleFadeInSections(1, "Leads", 0.5, fadeTime)
+		self.song:ScheduleFadeInSections(1, "Chords", 0.5, fadeTime)
+		self.song:ScheduleFadeInSections(1, "Backing", 0.5, fadeTime)
+		self.song:ScheduleFadeInSections(1, "Bassline", 0.5, fadeTime)
+		self.song:ScheduleFadeInSections(1, "Percussion", 0.5, fadeTime)
+
 		self:SetState("Shop")
 	end)
 	self:bindButton(self.optionsMain, "Stats", function()
@@ -218,6 +236,25 @@ function SLSGui:Start(initialState: SLSState?)
 		true
 	)
 
+	local Character = Players.LocalPlayer.Character
+	local Humanoid = Character:WaitForChild("Humanoid")
+	Humanoid.Died:Once(function()
+		warn("Character suddenly had a heart attacked and DIED mid shop.")
+		self:Destroy()
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+	end)
+
+	-- disable reset
+	local success, err = pcall(function(...)
+		StarterGui:SetCore("ResetButtonCallBack", false)
+	end)
+
+	if not success then
+		warn(err)
+	end
+
+	self.song:Play()
+
 	hideCoreGui()
 
 	self.started = true
@@ -230,6 +267,8 @@ function SLSGui:RequestClose()
 	if self.closing or self.destroyed or self.transitioning then
 		return
 	end
+
+	self.song:Stop()
 
 	self.closing = true
 	Player:SetAttribute("InShop", false)
@@ -337,9 +376,19 @@ function SLSGui:Destroy()
 		return
 	end
 
+	-- disable reset
+	local success, err = pcall(function(...)
+		StarterGui:SetCore("ResetButtonCallBack", true)
+	end)
+
+	if not success then
+		warn(err)
+	end
+
 	showCoreGui()
 	self.destroyed = true
 	self.closing = true
+	self.song:Destroy()
 
 	if self.shop then
 		if self.currentState == "Shop" then
@@ -354,6 +403,10 @@ function SLSGui:Destroy()
 
 	if self.stats then
 		self.stats:Destroy()
+	end
+
+	for _, sound in pairs(self.sounds) do
+		sound:Destroy()
 	end
 
 	if self.gui and self.gui.Parent then

@@ -1,11 +1,13 @@
 local Loadouts = {}
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ServerStorage = game:GetService("ServerStorage")
 local TextService = game:GetService("TextService")
 
 local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
+local InvokeLogger = require(ReplicatedStorage.ShopClient.InvokeLogger)
 local ShopBindables = ServerStorage:WaitForChild("ShopBindables")
 local GetAllInfoForCategory = ShopBindables:WaitForChild("GetAllInfoForCategory") :: BindableFunction
 local GetPlayerOwnedItems = ShopBindables:WaitForChild("GetPlayerOwnedItems") :: BindableFunction
@@ -20,6 +22,8 @@ type WeaponInfo = ShopTypes.WeaponInfo
 local itemInfoLibrary: { [string]: WeaponInfo } = {}
 local MAX_LOADOUT_NAME_LENGTH = 32
 local MAX_PLAYER_LOADOUTS = 25
+
+local noThrottlePlayer: Player? = nil
 
 local function getLoadoutConfig(): LoadoutConfig
 	local gamemode = workspace:GetAttribute("Gamemode")
@@ -71,9 +75,9 @@ local function validateLoadoutName(loadoutName: string): { Success: boolean, Rea
 end
 
 local function loadInfoLibrary()
-	local gunLibrary = GetAllInfoForCategory:Invoke("Gun")
-	local meleeLibrary = GetAllInfoForCategory:Invoke("Melee")
-	local armorLibrary = GetAllInfoForCategory:Invoke("Armor")
+	local gunLibrary = InvokeLogger.invoke(GetAllInfoForCategory, "Gun")
+	local meleeLibrary = InvokeLogger.invoke(GetAllInfoForCategory, "Melee")
+	local armorLibrary = InvokeLogger.invoke(GetAllInfoForCategory, "Armor")
 
 	for gunName, gunInfo in pairs(gunLibrary) do
 		itemInfoLibrary[gunName] = gunInfo
@@ -108,12 +112,16 @@ local function itemNameIsValid(itemName: string)
 end
 
 local function getPlayerOwnedItems(player: Player): { string }
-	return GetPlayerOwnedItems:Invoke(player)
+	return InvokeLogger.invoke(GetPlayerOwnedItems, player)
 end
 
 local function getLoadoutWeight(loadout: Loadout, loadoutConfig: LoadoutConfig): number
 	local totalWeight = 0
 	for _, itemName in ipairs(loadout) do
+		if itemName == "None" then
+			continue
+		end
+
 		if not itemInfoLibrary[itemName] then
 			warn("Item info not found for item: " .. itemName)
 			continue
@@ -273,8 +281,135 @@ local function setActiveLoadoutInvoke(
 	return { Success = true, ActiveLoadout = trimmedName }
 end
 
+local requestThrottle: { [Player]: number } = {}
+local requestThrottleConnected: { [Player]: boolean } = {}
+local REQUEST_COOLDOWN = 5
+
+local function findWeaponInShopWeapons(weaponName: string): Tool?
+	local shopWeapons = ServerStorage:FindFirstChild("ShopWeapons")
+	if not shopWeapons then
+		return nil
+	end
+
+	for _, descendant in ipairs(shopWeapons:GetDescendants()) do
+		if descendant:IsA("Tool") and descendant.Name == weaponName then
+			return descendant :: Tool
+		end
+	end
+
+	return nil
+end
+
+local function clearPlayerTools(player: Player)
+	for _, tool in ipairs(player.Backpack:GetChildren()) do
+		if tool:IsA("Tool") then
+			tool:Destroy()
+		end
+	end
+
+	if player.Character then
+		for _, tool in ipairs(player.Character:GetChildren()) do
+			if tool:IsA("Tool") then
+				tool:Destroy()
+			end
+		end
+	end
+end
+
+local function requestLoadout(player: Player, loadoutName: string): { Success: boolean, Reason: string? }
+	if typeof(loadoutName) ~= "string" then
+		return { Success = false, Reason = "Invalid loadout name" }
+	end
+
+	-- Useful for spawns/server validated ones
+	local isAllowed = player == noThrottlePlayer
+
+	local now = os.clock()
+	local cooldown = requestThrottle[player]
+	if cooldown and now < cooldown and not isAllowed then
+		local remaining = math.ceil(cooldown - now)
+		return { Success = false, Reason = `Wait {remaining} seconds before requesting again` }
+	end
+
+	if isAllowed then
+		noThrottlePlayer = nil
+	end
+
+	local activeLoadoutName = DataAPI.getPlayerActiveLoadout(player)
+	local targetLoadoutName = trimString(loadoutName)
+
+	if targetLoadoutName == "" then
+		if not activeLoadoutName then
+			return { Success = false, Reason = "No active loadout to request" }
+		end
+		targetLoadoutName = activeLoadoutName
+	end
+
+	local loadoutData = DataAPI.getPlayerLoadout(player, targetLoadoutName)
+	if not loadoutData then
+		return { Success = false, Reason = "Loadout not found" }
+	end
+
+	local validation = Loadouts.validateLoadout(player, targetLoadoutName, loadoutData)
+	if not validation.Success then
+		return validation
+	end
+
+	clearPlayerTools(player)
+
+	local shopWeapons = ServerStorage:FindFirstChild("ShopWeapons")
+	if not shopWeapons then
+		return { Success = false, Reason = "ShopWeapons folder not found in ServerStorage" }
+	end
+
+	for _, itemName in ipairs(loadoutData) do
+		if itemName == "None" then
+			continue
+		end
+
+		local tool = findWeaponInShopWeapons(itemName)
+		if not tool then
+			warn(`Weapon tool "{itemName}" not found in ServerStorage.ShopWeapons`)
+			continue
+		end
+
+		local clone = tool:Clone()
+		clone.Parent = player.Backpack
+	end
+
+	requestThrottle[player] = now + REQUEST_COOLDOWN
+
+	if not requestThrottleConnected[player] then
+		requestThrottleConnected[player] = true
+		player.AncestryChanged:Connect(function()
+			if not player:IsDescendantOf(game) then
+				requestThrottle[player] = nil
+				requestThrottleConnected[player] = nil
+			end
+		end)
+	end
+
+	return { Success = true, Reason = nil }
+end
+
+local function playerConnected(player: Player)
+	-- Spawn characters with their active loadout
+	local function hookCharacter(_)
+		local loadoutName = DataAPI.getPlayerActiveLoadout(player)
+		noThrottlePlayer = player
+		requestLoadout(player, loadoutName)
+	end
+
+	player.CharacterAdded:Connect(hookCharacter)
+	if player.Character then
+		hookCharacter(player.Character)
+	end
+end
+
 function Loadouts.load()
 	loadInfoLibrary()
+
+	Players.PlayerAdded:Connect(playerConnected)
 
 	ShopRemotes.ValidateLoadout.OnServerInvoke = serverLoadoutInvoke
 	ShopRemotes.GetPlayerLoadouts.OnServerInvoke = getPlayerLoadoutsInvoke
@@ -292,6 +427,13 @@ function Loadouts.load()
 		setActiveBindable.OnInvoke = setActiveLoadoutInvoke
 	else
 		warn("ShopBindables.SetActiveLoadout BindableFunction is missing")
+	end
+
+	local requestLoadoutRemote = ShopRemotes:FindFirstChild("RequestLoadout")
+	if requestLoadoutRemote and requestLoadoutRemote:IsA("RemoteFunction") then
+		requestLoadoutRemote.OnServerInvoke = requestLoadout
+	else
+		warn("ShopRemotes.RequestLoadout RemoteFunction is missing")
 	end
 
 	print("Loaded shop loadouts system")

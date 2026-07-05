@@ -5,13 +5,14 @@ local ShopRemotes = ReplicatedStorage:WaitForChild("ShopRemotes")
 local ValidateLoadoutFunction = ShopRemotes:WaitForChild("ValidateLoadout") :: RemoteFunction
 
 local ShopTypes = require(script.Parent.ShopTypes)
+local InvokeLogger = require(script.Parent.InvokeLogger)
 
 type Loadout = ShopTypes.Loadout
 type WeaponSlot = ShopTypes.WeaponSlot
 
 --- Confirm with the server this loadout is okay, and if not, why
 local function validateLoadout(loadoutName: string, loadout: Loadout): { Success: boolean, Reason: string? }
-	local result = ValidateLoadoutFunction:InvokeServer(loadoutName, loadout)
+	local result = InvokeLogger.invokeServer(ValidateLoadoutFunction, loadoutName, loadout)
 	return result
 end
 

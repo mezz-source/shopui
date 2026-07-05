@@ -1,6 +1,7 @@
 return {
 	_version = "1.1.0",
 	_served = true,
+	_uniquePerGamemode = true,
 	Kills = 0,
 	Deaths = 0,
 	Level = 0,

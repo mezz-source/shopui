@@ -5,12 +5,14 @@ local Purchases = {}
 
 local DataAPI = require(game.ServerScriptService.DataAPI.API)
 local ShopTypes = require(game.ReplicatedStorage.ShopClient.ShopTypes)
+local InvokeLogger = require(game.ReplicatedStorage.ShopClient.InvokeLogger)
+local Queries = require(script.Parent.Queries)
 
 local ShopBindables = ServerStorage.ShopBindables
 
 local function getWeaponInfo(weaponName: string): ShopTypes.WeaponInfo?
 	local GetWeaponInfoBindable = ShopBindables.GetWeaponInfo
-	local response = GetWeaponInfoBindable:Invoke(weaponName)
+	local response = InvokeLogger.invoke(GetWeaponInfoBindable, weaponName)
 	return response
 end
 
@@ -26,7 +28,7 @@ end
 
 local function hasBadgeUnlocked(_player: Player, _badgeTag: string): boolean
 	-- Stubbed for now; replace with your badge ownership logic.
-	return false
+	return true
 end
 
 local function passesSpecialUnlockRequirement(player: Player, itemInfo: ShopTypes.WeaponInfo): boolean
@@ -97,6 +99,8 @@ local function purchaseRequest(player: Player, itemName: string)
 	if not ownedSuccess then
 		return false, message
 	end
+
+	Queries.invalidateOwnedItemsCache(player.UserId)
 
 	ShopRemotes.ItemPurchased:FireClient(player, itemName)
 

@@ -22,12 +22,14 @@ local RemoveLoadout = Remotes:WaitForChild("RemoveLoadout")
 local SetActiveLoadout = Remotes:FindFirstChild("SetActiveLoadout")
 local LoadoutConfigs = script.Parent.Parent:WaitForChild("LoadoutConfigs")
 local WeaponPreviews = ReplicatedStorage:WaitForChild("WeaponPreview")
+local RequestLoadout = Remotes:WaitForChild("RequestLoadout")
 
 local Datastore = ReplicatedStorage:WaitForChild("Datastore")
 local GetPlayerInventory = Datastore:WaitForChild("getPlayerInventory")
 
 local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
 local AnimationHandler = require(script.Parent.Parent.AnimationHandler)
+local InvokeLogger = require(script.Parent.Parent.InvokeLogger)
 
 local CAMERA_MOUSE_INFLUENCE = 0.24
 local CAMERA_LERP_ALPHA = 0.01
@@ -57,6 +59,26 @@ local WEIGHT_TO_IMAGE = {
 	Moderate = "rbxassetid://104459017965358",
 	Heavy = "rbxassetid://110968118318707",
 }
+
+--[[
+
+	LOADOUT HELPER
+
+]]
+
+--- One exit of the loadout state, requests the new loadout from the server and applies to the player
+--- This should be done infrequently as the server aggressively throttles this
+--- ... which is why we do it only when they exit the loadout screen
+local function finalRequestLoadout(loadoutName: string)
+	task.spawn(function()
+		local result = RequestLoadout:InvokeServer(loadoutName)
+		local success = result["Success"]
+		local reason = result["Reason"]
+		if not success then
+			warn("Equip loadout failure:", reason)
+		end
+	end)
+end
 
 --[[
 
@@ -91,6 +113,9 @@ end
 ]]
 
 local function selectLoadoutButton(button)
+	if not button then
+		return
+	end
 	button.BackgroundTransparency = 0
 	button.BackgroundColor3 = Color3.new(1, 1, 1)
 	button.WeaponName.TextColor3 = Color3.new(0, 0, 0)
@@ -98,6 +123,10 @@ local function selectLoadoutButton(button)
 end
 
 local function unselectLoadoutButton(button)
+	if not button then
+		return
+	end
+	-- print("unsel", button.Name)
 	button.BackgroundTransparency = 0.5
 	button.BackgroundColor3 = Color3.new(0, 0, 0)
 	button.WeaponName.TextColor3 = Color3.new(1, 1, 1)
@@ -143,6 +172,52 @@ local function getAnimsFromMeleeModel(model: Model): { ["Idle"]: string, ["Equip
 	}
 end
 
+local function getSoundsFromGunModel(model: Model): { ["Equip"]: Sound? }
+	local Setting = model:FindFirstChild("Setting")
+	if not Setting then
+		warn("Gun", model.Name, "is missing settings module")
+		return { Equip = nil }
+	end
+
+	local PrimaryHandle = model:FindFirstChild("Handle")
+		or model:FindFirstChild("NotHandle")
+		or model:FindFirstChild("4 - Base")
+	if not PrimaryHandle then
+		warn("Gun", model.Name, "is missing a primary handle")
+		return { Equip = nil }
+	end
+
+	local EquippedSound = PrimaryHandle:FindFirstChild("EquippedSound")
+	if not EquippedSound then
+		warn("Gun", model.Name, "is missing an EquippedSound")
+		return { Equip = nil }
+	end
+
+	return {
+		Equip = EquippedSound :: Sound,
+	}
+end
+
+local function getSoundsFromMeleeModel(model: Model): { ["Equip"]: Sound? }
+	local PrimaryHandle = model:FindFirstChild("Handle")
+		or model:FindFirstChild("4 - Base")
+		or model:FindFirstChild("NotHandle")
+	if not PrimaryHandle then
+		warn("Melee weapon", model.Name, "is missing a primary handle")
+		return { Equip = nil }
+	end
+
+	local EquippedSound = PrimaryHandle:FindFirstChild("EquipSound")
+	if not EquippedSound then
+		warn("Melee weapon", model.Name, "is missing an EquipSound")
+		return { Equip = nil }
+	end
+
+	return {
+		Equip = EquippedSound :: Sound,
+	}
+end
+
 function LoadoutUI:CharacterWeldWeapon(weaponModel: Model)
 	local Base4 = weaponModel:FindFirstChild("4 - Base")
 	local NotHandle = weaponModel:FindFirstChild("NotHandle")
@@ -184,6 +259,35 @@ function LoadoutUI:CharacterWeldWeapon(weaponModel: Model)
 	end
 end
 
+function LoadoutUI:CharacterPlayToolSounds(weaponModel)
+	local isGun = weaponModel:FindFirstChild("Setting") ~= nil
+
+	local success, result = pcall(function()
+		if isGun then
+			return getSoundsFromGunModel(weaponModel)
+		else
+			return getSoundsFromMeleeModel(weaponModel)
+		end
+	end)
+
+	if not success then
+		warn("Failed to get sounds for weapon model", weaponModel.Name, result)
+		return
+	end
+
+	-- Check to make sure results are numbers
+	if typeof(result) ~= "table" then
+		warn(result)
+		warn("Failed to load sounds for weapon model", weaponModel.Name, "invalid sound ids")
+		return
+	end
+
+	local sound = result["Equip"]
+	if sound then
+		sound:Play()
+	end
+end
+
 function LoadoutUI:CharacterPlayToolAnims(weaponModel: Model)
 	local isGun = weaponModel:FindFirstChild("Setting") ~= nil
 
@@ -211,7 +315,7 @@ function LoadoutUI:CharacterPlayToolAnims(weaponModel: Model)
 	local idle = self.animationHandler:LoadAnimationById(result.Idle, "ToolIdle")
 	idle.Looped = true
 	equip.Priority = Enum.AnimationPriority.Action
-	equip:Play(0.3)
+	equip:Play(0)
 
 	equip.Stopped:Connect(function()
 		if idle and equip and self.currentWeaponModel == weaponModel then
@@ -244,6 +348,34 @@ function LoadoutUI:CharacterEquipTool(toolName: string)
 
 	self:CharacterWeldWeapon(clone)
 	self:CharacterPlayToolAnims(clone)
+	self:CharacterPlayToolSounds(clone)
+end
+
+function LoadoutUI:ChangedEffects()
+	if not self.characterModel or self.isShowing then
+		return
+	end
+
+	if self.lastHighlightTween then
+		self.lastHighlightTween:Pause()
+	end
+
+	local Highlight = self.characterModel:FindFirstChild("Highlight") :: Highlight
+	local DustPart = self.characterModel:FindFirstChild("Dust")
+	local FlyUp = DustPart:FindFirstChild("FlyUp") :: ParticleEmitter
+	FlyUp:Emit(30)
+
+	Highlight.FillTransparency = 0
+
+	local tween = TweenService:Create(
+		Highlight,
+		TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ FillTransparency = 1 }
+	)
+
+	self.lastHighlightTween = tween
+
+	tween:Play()
 end
 
 --[[
@@ -355,13 +487,16 @@ function LoadoutUI:GetLoadoutFromSlots(slots: { WeaponSlot }): ShopTypes.Loadout
 end
 
 function LoadoutUI:CreateLoadoutFromSlots(name: string, slots: { WeaponSlot })
-	local response = ValidateLoadout:InvokeServer(name, self:GetLoadoutFromSlots(slots))
+	local response = InvokeLogger.invokeServer(ValidateLoadout, name, self:GetLoadoutFromSlots(slots))
 	local success, reason = response["Success"], response["Reason"]
 	if success then
 		if typeof(response["Loadouts"]) == "table" then
 			self.loadouts = response["Loadouts"]
 		end
+		self.loadoutAddButton.ImageColor3 = Color3.new(1, 1, 1)
 		self:SetLoadoutStatusText(`{name} saved successfully`, false)
+		self.activeLoadoutName = name
+		self.currentLoadoutName = name
 		return true
 	else
 		warn(`Failed to create loadout {name}: {reason}`)
@@ -388,9 +523,13 @@ function LoadoutUI:LoadLoadoutIntoSlots(loadout: ShopTypes.Loadout)
 					Weight = itemInfo.Weight,
 					PreviewImage = itemInfo.PreviewImage,
 					Button = nil,
+					IsTorsoDominant = itemInfo["IsTorsoDominant"] or false,
 				}
 				local isFirstSlot = i == 1
 				self:EquipWeaponToSlot(weaponChoice, i, isFirstSlot)
+			else
+				warn(`Failed to load weapon info for {weaponName}, clearing slot {i}`)
+				self:UnequipWeaponFromSlot(i, false)
 			end
 		else
 			self:UnequipWeaponFromSlot(i, true)
@@ -408,7 +547,7 @@ function LoadoutUI:DeleteLoadout(name: string)
 
 	self.isDeletingLoadout = true
 
-	local result = RemoveLoadout:InvokeServer(name)
+	local result = InvokeLogger.invokeServer(RemoveLoadout, name)
 	local success = result["Success"]
 	local message = result["Reason"]
 	if not success then
@@ -430,7 +569,7 @@ function LoadoutUI:SetActiveLoadout(loadoutName: string)
 	task.defer(function()
 		if SetActiveLoadout and SetActiveLoadout:IsA("RemoteFunction") then
 			local callSuccess, response = pcall(function()
-				return SetActiveLoadout:InvokeServer(loadoutName)
+				return InvokeLogger.invokeServer(SetActiveLoadout, loadoutName)
 			end)
 
 			if not callSuccess then
@@ -445,17 +584,26 @@ function LoadoutUI:SetActiveLoadout(loadoutName: string)
 end
 
 function LoadoutUI:EquipLoadout(loadoutName: string, loadout: ShopTypes.Loadout, noSound: boolean?)
-	if loadoutName == self.currentLoadoutName then
+	if self.isApplyingLoadout then
 		return
 	end
 
-	self:SetActiveLoadout(loadoutName)
+	local isNew = loadoutName ~= self.currentLoadoutName
 
-	self.currentLoadoutName = loadoutName
-	self:LoadLoadoutIntoSlots(loadout)
-	if not noSound then
-		self:PlaySound("Equip")
+	if isNew then
+		self:CharacterClearLastTool()
+		self.activeLoadoutName = loadoutName
+		self.loadoutNameEntry.Text = loadoutName
+		self:SetActiveLoadout(loadoutName)
+		self.currentLoadoutName = loadoutName
+		self.loadoutAddButton.ImageColor3 = Color3.new(1, 1, 1)
+		if not noSound then
+			self:PlaySound("Equip")
+		end
 	end
+
+	self:LoadLoadoutIntoSlots(loadout)
+	self:UpdateWeightBar()
 end
 
 function LoadoutUI:SyncLoadoutSelectionState()
@@ -463,13 +611,16 @@ function LoadoutUI:SyncLoadoutSelectionState()
 		return
 	end
 
-	local selectedButton = self.lastSelectedLoadoutButton
-	if not selectedButton then
-		return
-	end
-
-	local selectedLoadout = self.loadouts[selectedButton.Name]
+	local selectedLoadout = self.loadouts[self.currentLoadoutName]
 	if typeof(selectedLoadout) ~= "table" then
+		-- No matching saved loadout, mark as custom
+		unselectLoadoutButton(self.lastSelectedLoadoutButton)
+		self.lastSelectedLoadoutButton = nil
+		if self.currentLoadoutName ~= "Custom" then
+			-- print(self.currentLoadoutName)
+		end
+		self.currentLoadoutName = "Custom"
+		self.loadoutAddButton.ImageColor3 = Color3.new(1, 1, 0)
 		return
 	end
 
@@ -479,9 +630,12 @@ function LoadoutUI:SyncLoadoutSelectionState()
 		return
 	end
 
-	unselectLoadoutButton(selectedButton)
+	unselectLoadoutButton(self.lastSelectedLoadoutButton)
+
+	-- print(self.currentLoadoutName)
 	self.lastSelectedLoadoutButton = nil
 	self.currentLoadoutName = "Custom"
+	self.loadoutAddButton.ImageColor3 = Color3.new(1, 1, 0)
 end
 
 function LoadoutUI:BounceAddLoadoutButton()
@@ -525,7 +679,7 @@ function LoadoutUI:CreateLoadoutButton(loadoutName: string, loadout: ShopTypes.L
 	self.loadouts[loadoutName] = loadout
 
 	buttonClone.MouseButton1Down:Connect(function()
-		if self.lastSelectedLoadoutButton then
+		if self.lastSelectedLoadoutButton and self.lastSelectedLoadoutButton ~= buttonClone then
 			-- print("unselect")
 			unselectLoadoutButton(self.lastSelectedLoadoutButton)
 		end
@@ -601,6 +755,7 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 	self.loadouts = {}
 	self.lastLoadoutList = {}
 	self.currentLoadoutName = "Default"
+	self.activeLoadoutName = "Default"
 	self.setLoadoutName = ""
 	self.addLoadoutLocked = false
 	self.isApplyingLoadout = false
@@ -611,6 +766,7 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 
 	self.lastSelectedLoadoutButton = nil
 	self.lastSelectedSlot = nil
+	self.confirmed = false
 
 	local Character = self.loadoutCharacter:WaitForChild("Character")
 	local CameraPart = self.loadoutCharacter:WaitForChild("CameraPart")
@@ -630,6 +786,21 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 		if exitButton and exitButton:IsA("TextButton") then
 			self.exitButton = exitButton
 			exitButton.MouseButton1Down:Connect(function()
+				if self.currentLoadoutName == "Custom" and not self.confirmed then
+					self:PlaySound("Error")
+					self:SetLoadoutStatusText(
+						"Warning: You have not saved this loadout!\nPress exit to leave anyways",
+						true
+					)
+					self.confirmed = true
+
+					task.delay(5, function()
+						self.confirmed = false
+					end)
+
+					return
+				end
+
 				self:RequestExit()
 			end)
 		end
@@ -641,8 +812,8 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 end
 
 function LoadoutUI:RefreshLoadoutSelection()
-	local rawResult = GetPlayerLoadouts:InvokeServer()
-	local inventorySetting = GetPlayerInventory:InvokeServer()
+	local rawResult = InvokeLogger.invokeServer(GetPlayerLoadouts)
+	local inventorySetting = InvokeLogger.invokeServer(GetPlayerInventory)
 	local activeLoadout = inventorySetting["ActiveLoadout"] or "Default"
 	local getSavedLoadouts = rawResult
 
@@ -672,6 +843,7 @@ function LoadoutUI:RefreshLoadoutSelection()
 			self:EquipLoadout(name, loadout, true)
 			self.lastSelectedLoadoutButton = button
 			selectLoadoutButton(button)
+			self.loadoutNameEntry.Text = name
 		end
 	end
 end
@@ -693,7 +865,7 @@ function LoadoutUI:GetWeaponInfoCached(weaponName: string, forceRefresh: boolean
 	end
 
 	local ok, itemInfo = pcall(function()
-		return RemoteInfo:InvokeServer(weaponName)
+		return InvokeLogger.invokeServer(RemoteInfo, weaponName)
 	end)
 
 	if not ok then
@@ -721,7 +893,7 @@ function LoadoutUI:GetOwnedItemsCached(forceRefresh: boolean?): { string }
 	end
 
 	local ok, ownedItems = pcall(function()
-		return Remotes.GetOwnedItems:InvokeServer()
+		return InvokeLogger.invokeServer(Remotes.GetOwnedItems)
 	end)
 
 	if not ok then
@@ -929,9 +1101,25 @@ function LoadoutUI:InitCharacter()
 		* CFrame.Angles(math.rad(orientation.X), math.rad(orientation.Y), math.rad(orientation.Z))
 	RightGrip.Part0 = RightArm
 
-	local idle = self.animationHandler:LoadAnimationById("180435571", "Idle") :: AnimationTrack
+	local idle = self.animationHandler:LoadAnimationById("112030243200049", "Idle", true) :: AnimationTrack
+	local equip = self.animationHandler:LoadAnimationById("135602708513353", "EquipBounce", true) :: AnimationTrack
+	local walkOn = self.animationHandler:LoadAnimationById("118529909671725", "WalkOn", true) :: AnimationTrack
+	local empty = self.animationHandler:LoadAnimationById("129015535034160", "Empty", true) :: AnimationTrack
+	local toolIdle = self.animationHandler:LoadAnimationById("180435571", "ToolIdle", true) :: AnimationTrack
+	self.walkOnAnimation = walkOn
+	self.emptyAnim = empty
+	self.emptyIdleAnim = idle
+	self.toolIdleAnim = toolIdle
+	self.equipBounce = equip
+
+	toolIdle.Looped = true
 	idle.Looped = true
 	idle:Play()
+
+	equip.Priority = Enum.AnimationPriority.Action
+	walkOn.Priority = Enum.AnimationPriority.Movement
+	empty.Priority = Enum.AnimationPriority.Action2
+	idle.Priority = Enum.AnimationPriority.Core
 end
 
 function LoadoutUI:LoadSounds()
@@ -1035,6 +1223,8 @@ function LoadoutUI:EquipWeaponToSlot(
 		self:ClearWeaponInSlot(existingSlot.SlotIndex)
 	end
 
+	-- self.animationHandler:Stop("Empty")
+
 	local Button = slot.Button
 	local WeaponImage = Button:FindFirstChild("WeaponImage") :: ImageLabel
 	local Title = Button:FindFirstChild("Title") :: TextLabel
@@ -1065,14 +1255,33 @@ function LoadoutUI:NewWeaponEquipped(weaponChoice: WeaponChoice, slotIndex: numb
 	local toolName = weaponChoice.Name
 	self:CharacterEquipTool(toolName)
 	self.lastEquippedChoice = weaponChoice.Name
+	self.emptyAnim:Stop(0)
+	self.equipBounce:Play(0)
+	self:ChangedEffects()
+
+	if toolName ~= "None" and weaponChoice.IsTorsoDominant then
+		self.equipBounce:Stop(0) -- looks weird for default stand
+		self.toolIdleAnim:Play(0)
+		self.emptyIdleAnim:Stop(0)
+		-- print("dominant cancel")
+	elseif toolName ~= "None" and not weaponChoice.IsTorsoDominant then
+		self.emptyIdleAnim:Play(0)
+		self.toolIdleAnim:Stop(0)
+		-- print("non-dominant cancel")
+	end
 end
 
 -- new unequip effects
 -- only use sounds for buttons
 function LoadoutUI:NewWeaponUnequipped(slotIndex: number)
+	self.equipBounce:Play(0)
 	if self.lastEquippedChoice == self.weaponSlots[slotIndex].CurrentItem then
 		self:CharacterClearLastTool()
 		self.lastEquippedChoice = nil
+		self.emptyIdleAnim:Play(0)
+		self.toolIdleAnim:Stop(0)
+		self.emptyAnim:Play(0)
+		self:ChangedEffects()
 	end
 end
 
@@ -1138,6 +1347,7 @@ function LoadoutUI:UpdateWeaponSelection(refreshOwnedItems: boolean?)
 				Weight = itemInfo.Weight,
 				PreviewImage = itemInfo.PreviewImage,
 				Button = newButton,
+				IsTorsoDominant = itemInfo["IsTorsoDominant"] or false,
 			}
 
 			table.insert(self.weaponChoices, weaponChoice)
@@ -1427,25 +1637,25 @@ function LoadoutUI:UpdateWeightBar()
 	barFill:TweenSize(UDim2.new(fillPercentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 0.5, true)
 
 	local bgColor = Color3.new(1, 1, 1)
-	if fillPercentage > 0.8 then
+	if fillPercentage > 0.7 then
 		bgColor = Color3.fromRGB(255, 0, 0)
-	elseif fillPercentage > 0.6 then
+	elseif fillPercentage > 0.5 then
 		bgColor = Color3.fromRGB(255, 255, 0)
 	end
 
-	if barFill.BackgroundColor3 ~= bgColor then
-		TweenService:Create(
-			barFill,
-			TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
-			{ BackgroundColor3 = bgColor }
-		):Play()
+	TweenService:Create(
+		barFill,
+		TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+		{ BackgroundColor3 = bgColor }
+	):Play()
 
-		TweenService:Create(
+	TweenService
+		:Create(
 			weightIcon,
 			TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
 			{ ImageColor3 = bgColor }
-		):Play()
-	end
+		)
+		:Play()
 end
 
 --[[
@@ -1540,6 +1750,7 @@ function LoadoutUI:Show()
 	if self.isShowing then
 		return
 	end
+
 	self.alive = true
 	self.isShowing = true
 
@@ -1556,18 +1767,34 @@ function LoadoutUI:Show()
 	self:SetupRenderConnect()
 	showScreen()
 
+	if self.walkOnAnimation then
+		self.walkOnAnimation:Play()
+	end
+
 	if self.mainFrame then
 		self.mainFrame.Visible = true
 	end
 
-	self.mainFrame:TweenPosition(UDim2.new(0.5, 0, 0.5, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.5, true)
+	self.mainFrame:TweenPosition(
+		UDim2.new(0.5, 0, 0.5, 0),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quad,
+		0.5,
+		true,
+		function()
+			self.isShowing = false
+		end
+	)
 end
 
 function LoadoutUI:Hide(exitting: boolean?, destroyAfterFade: boolean?)
 	self.alive = false
 
-	if not self.isShowing then
-		return
+	local loadoutName = self.activeLoadoutName
+	if loadoutName and loadoutName ~= "" and loadoutName ~= "Custom" then
+		finalRequestLoadout(loadoutName)
+	else
+		finalRequestLoadout("Default")
 	end
 
 	self.isShowing = false
@@ -1616,6 +1843,10 @@ function LoadoutUI:Destroy()
 	if self.connection then
 		self.connection:Disconnect()
 		self.connection = nil
+	end
+
+	for _, sound in pairs(self.sounds) do
+		sound:Destroy()
 	end
 
 	if self.mainFrame and self.mainFrame.Parent then

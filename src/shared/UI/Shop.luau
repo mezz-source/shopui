@@ -23,6 +23,7 @@ local ShopInfos = ReplicatedStorage.ShopClient.ShopInfos
 local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
 local GunScoring = require(script.Parent.Parent.GunScoring)
 local MeleeScoring = require(script.Parent.Parent.MeleeScoring)
+local InvokeLogger = require(script.Parent.Parent.InvokeLogger)
 
 local Shops = workspace:WaitForChild("Shops")
 
@@ -66,7 +67,37 @@ local function clamp01(value: number): number
 	return value
 end
 
+local function getPreviewCameraOffset(weaponInfo: WeaponInfo?): Vector3
+	if weaponInfo and weaponInfo.PreviewCameraOffset then
+		return weaponInfo.PreviewCameraOffset
+	end
+
+	return Vector3.zero
+end
+
+local function getPreviewModelSpinAxis(weaponInfo: WeaponInfo?): Vector3
+	local orientationOffset = if weaponInfo then weaponInfo.PreviewModelOrientationOffset else nil
+	if orientationOffset and orientationOffset.Magnitude > 0 then
+		return orientationOffset.Unit
+	end
+
+	return Vector3.yAxis
+end
+
 ---------
+
+local function formatNumber(num: number): string
+	local formatted = tostring(math.floor(num))
+	local count
+	while true do
+		formatted, count = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+		if count == 0 then
+			break
+		end
+	end
+
+	return formatted
+end
 
 local function _getShopInfo(shopName: string): ShopInfo
 	local info = ShopInfos:FindFirstChild(shopName)
@@ -75,11 +106,11 @@ local function _getShopInfo(shopName: string): ShopInfo
 end
 
 local function _getWeaponInfo(weaponName: string): WeaponInfo?
-	return RemoteInfo:InvokeServer(weaponName)
+	return InvokeLogger.invokeServer(RemoteInfo, weaponName)
 end
 
 local function _getAllWeaponInfosForCategory(category: Category): { WeaponInfo }
-	local infos = RemoteInfoAll:InvokeServer({ category = category })
+	local infos = InvokeLogger.invokeServer(RemoteInfoAll, { category = category })
 	if not infos then
 		warn("No info provided")
 	end
@@ -87,7 +118,7 @@ local function _getAllWeaponInfosForCategory(category: Category): { WeaponInfo }
 end
 
 local function _queryAllWeapons(queryTable): { WeaponInfo }
-	local infos = RemoteInfoAll:InvokeServer(queryTable)
+	local infos = InvokeLogger.invokeServer(RemoteInfoAll, queryTable)
 	if not infos then
 		warn("No info provided")
 	end
@@ -161,7 +192,7 @@ end
 
 local function hasBadgeUnlocked(_badgeTag: string): boolean
 	-- Stubbed for now; replace with your badge ownership logic.
-	return false
+	return true
 end
 
 local function isInRequiredGroup(groupId: number): boolean
@@ -200,11 +231,11 @@ local function getRequirementLockState(weaponInfo: WeaponInfo): { isUnlocked: bo
 	end
 
 	if badgeTag ~= nil and badgeTag ~= "" and groupId ~= nil and groupId > 0 then
-		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag .. " OR GROUP ONLY" }
+		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag:upper() .. " OR GROUP ONLY" }
 	end
 
 	if badgeTag ~= nil and badgeTag ~= "" then
-		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag }
+		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag:upper() }
 	end
 
 	return { isUnlocked = false, lockText = "GROUP ONLY" }
@@ -230,7 +261,6 @@ function ShopUI.new(
 	self.shopInfo = nil
 
 	self.CameraPart = nil
-	self.ShopMusic = nil
 	self.ShopModel = nil
 	self.ShopName = shopModelName
 
@@ -241,14 +271,11 @@ function ShopUI.new(
 			return self
 		end
 
-		assert(Shop:FindFirstChild("ShopMusic"), "No shop music")
 		assert(Shop:FindFirstChild("Shop"), "No shop model")
 		assert(Shop:FindFirstChild("CameraPart"), "No camera part")
 
 		self.shopInfo = _getShopInfo(shopModelName)
 		self.CameraPart = Shop.CameraPart
-		self.ShopMusic = Shop.ShopMusic
-		self.ShopMusic.Volume = 0.3
 
 		self.ShopModel = Shop.Shop
 	end
@@ -363,6 +390,8 @@ function ShopUI.new(
 	self.currencyAnimationToken = 0
 	self.currentCurrencyAmount = nil
 	self.ownedItems = {}
+	self.pendingPurchaseRefreshWeaponName = nil
+	self.lastPurchaseRefreshWeaponName = nil
 	self.currentWeaponInfoButtons = {}
 	self.currentWeaponName = nil
 
@@ -378,7 +407,7 @@ function ShopUI:Start()
 		return
 	end
 
-	if not self.shopInfo or not self.CameraPart or not self.ShopMusic or not self.ShopModel then
+	if not self.shopInfo or not self.CameraPart or not self.ShopModel then
 		warn("ShopUI cannot start without a valid shop model")
 		return
 	end
@@ -388,13 +417,41 @@ function ShopUI:Start()
 end
 
 function ShopUI:UpdateOwnedWeapons()
-	local ownedItems = Remotes.GetOwnedItems:InvokeServer() :: { string }
+	local ownedItems = InvokeLogger.invokeServer(Remotes.GetOwnedItems) :: { string }
 	if not ownedItems then
 		warn("No owned items provided")
 		return
 	end
 
 	self.ownedItems = ownedItems
+end
+
+function ShopUI:RegisterOwnedItem(weaponName: string)
+	if table.find(self.ownedItems, weaponName) ~= nil then
+		return
+	end
+
+	table.insert(self.ownedItems, weaponName)
+end
+
+function ShopUI:RefreshPurchasedWeaponState(weaponName: string)
+	if self.purchaseInProgress then
+		self.pendingPurchaseRefreshWeaponName = weaponName
+		return
+	end
+
+	if self.lastPurchaseRefreshWeaponName == weaponName then
+		return
+	end
+
+	self.lastPurchaseRefreshWeaponName = weaponName
+	self.pendingPurchaseRefreshWeaponName = nil
+	self:RegisterOwnedItem(weaponName)
+	self:UpdateWeaponInfos()
+
+	if self.currentWeaponName == weaponName then
+		self:SelectWeapon(weaponName)
+	end
 end
 
 function ShopUI:UpdateCurrencyDisplay(targetAmount: number)
@@ -468,7 +525,15 @@ function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
 	local cost = weaponFrame.Cost :: TextLabel
 	local level = weaponFrame.Level :: TextLabel
 	local image = weaponFrame.ImageLabel :: ImageLabel
-	cost.Text = "※ " .. weaponInfo.Price
+	cost.Text = "※ " .. formatNumber(weaponInfo.Price)
+
+	if weaponInfo.Price == 0 then
+		cost.Text = ""
+	end
+
+	if weaponInfo.Level == 0 then
+		level.Text = ""
+	end
 
 	if self:OwnsWeapon(weaponInfo.Name) then
 		title.BackgroundColor3 = Color3.new(0.062745, 0.2, 0.062745)
@@ -513,7 +578,11 @@ end
 function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
 	self.PurchaseArea.Visible = true
 	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
-	self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+	self.PurchaseButton.Text = "※ " .. formatNumber(weaponInfo.Price)
+
+	if weaponInfo.Price == 0 then
+		self.PurchaseButton.Text = "FREE"
+	end
 
 	if self:OwnsWeapon(weaponInfo.Name) then
 		self.PurchaseButton.Text = "OWNED"
@@ -535,11 +604,14 @@ function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
 
 	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
 	if result.reason == "MoneyLevel" then
-		self.PurchaseButton.Text = "※ " .. weaponInfo.Price .. " | LVL " .. weaponInfo.Level
+		self.PurchaseButton.Text = "※ "
+			.. formatNumber(weaponInfo.Price)
+			.. " | LVL "
+			.. formatNumber(weaponInfo.Level)
 	elseif result.reason == "Money" then
-		self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+		self.PurchaseButton.Text = "※ " .. formatNumber(weaponInfo.Price)
 	elseif result.reason == "Level" then
-		self.PurchaseButton.Text = "LVL " .. weaponInfo.Level
+		self.PurchaseButton.Text = "LVL " .. formatNumber(weaponInfo.Level)
 	end
 end
 
@@ -611,6 +683,8 @@ end
 function ShopUI:SetupWeaponPreview(weaponName: string)
 	self:ClearWeaponPreview()
 
+	local weaponInfo = _getWeaponInfo(weaponName)
+
 	local model = WeaponPreviews:FindFirstChild(weaponName)
 	if not model then
 		warn("No preview model", weaponName)
@@ -625,8 +699,16 @@ function ShopUI:SetupWeaponPreview(weaponName: string)
 		return
 	end
 
+	if self.previewConnection then
+		--- removes the EPIC SPINNING bug that would happen
+		--- if you spam selected
+		--- at least in theory....
+		self.previewConnection:Disconnect()
+	end
+
 	local previewClone = model:Clone()
-	previewClone:PivotTo(CFrame.new())
+	local previewClonePivot = previewClone:GetPivot()
+	previewClone:PivotTo(CFrame.new() * previewClonePivot.Rotation)
 
 	local worldModel = Instance.new("WorldModel")
 	worldModel.Parent = self.ViewportFrame
@@ -636,10 +718,14 @@ function ShopUI:SetupWeaponPreview(weaponName: string)
 	self.previewWorldModel = worldModel
 	self.previewBasePivot = previewClone:GetPivot()
 
+	local previewCameraOffset = getPreviewCameraOffset(weaponInfo)
+	local previewModelSpinAxis = getPreviewModelSpinAxis(weaponInfo)
+
 	local _, boundsSize = previewClone:GetBoundingBox()
 	local cameraDistance = math.max(boundsSize.X, boundsSize.Y + 0.3, boundsSize.Z) * 1.7 + 1.25
-	self.PreviewCamera.CFrame =
-		CFrame.new(Vector3.new(0, boundsSize.Y * 0.1, cameraDistance), Vector3.new(0, boundsSize.Y * 0.1, 0))
+	local cameraFocus = Vector3.new(0, boundsSize.Y * 0.1, 0)
+	self.PreviewCamera.CFrame = CFrame.new(Vector3.new(0, cameraFocus.Y, cameraDistance), cameraFocus)
+		* CFrame.new(previewCameraOffset)
 
 	self.previewConnection = RunService.RenderStepped:Connect(function(deltaTime)
 		if not self.alive or not self.previewModel or not self.previewBasePivot then
@@ -647,7 +733,7 @@ function ShopUI:SetupWeaponPreview(weaponName: string)
 		end
 
 		self.previewAngle += deltaTime * 0.6
-		self.previewModel:PivotTo(self.previewBasePivot * CFrame.Angles(0, self.previewAngle, 0))
+		self.previewModel:PivotTo(self.previewBasePivot * CFrame.fromAxisAngle(previewModelSpinAxis, self.previewAngle))
 	end)
 end
 
@@ -707,7 +793,7 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 	end
 
 	if weaponInfo.Category == "Gun" then
-		local gunInfo = GetGunSettings:InvokeServer(weaponInfo.Name) :: GunInfo
+		local gunInfo = InvokeLogger.invokeServer(GetGunSettings, weaponInfo.Name) :: GunInfo
 		if not gunInfo then
 			warn("No gun info", weaponInfo.Name)
 			return
@@ -735,7 +821,7 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 		local damageColor = DAMAGE_TYPE_TO_COLOR[damageType] or Color3.new(1, 1, 0)
 		createPill(damageType, damageColor)
 	elseif weaponInfo.Category == "Melee" then
-		local meleeInfo = GetMeleeSettings:InvokeServer(weaponInfo.Name) :: MeleeInfo
+		local meleeInfo = InvokeLogger.invokeServer(GetMeleeSettings, weaponInfo.Name) :: MeleeInfo
 		if not meleeInfo then
 			warn("No melee info", weaponInfo.Name)
 			return
@@ -767,11 +853,18 @@ function ShopUI:SelectWeapon(weaponName: string)
 		return
 	end
 
+	-- mass-spamming can cause strange happenings
+	if self.selectInProgress then
+		return
+	end
+
 	local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
 	if not weaponInfo then
 		warn("No weapon info", weaponName)
 		return
 	end
+
+	self.selectInProgress = true
 
 	self.currentWeaponName = weaponName
 
@@ -782,6 +875,10 @@ function ShopUI:SelectWeapon(weaponName: string)
 
 	self:SetupWeaponPreview(weaponName)
 	self:LoadStats(weaponInfo)
+
+	task.delay(0.3, function()
+		self.selectInProgress = false
+	end)
 end
 
 function ShopUI:SelectFilter(filterType: "Weight", filter)
@@ -864,8 +961,8 @@ function ShopUI:LoadWeaponInfos(info: { WeaponInfo })
 
 		DisplayImage.Image = weaponInfo.PreviewImage
 		Title.Text = weaponInfo.Name
-		Level.Text = "LVL " .. weaponInfo.Level
-		Cost.Text = "※ " .. weaponInfo.Price
+		Level.Text = "LVL " .. formatNumber(weaponInfo.Level)
+		Cost.Text = "※ " .. formatNumber(weaponInfo.Price)
 		weaponTextButton.Parent = self.ScrollingFrame
 
 		self:ApplyWeaponFrameState(weaponTextButton, weaponInfo)
@@ -1022,6 +1119,9 @@ function ShopUI:PurchaseCurrentItem()
 		self.purchaseInProgress = false
 		self.purchaseLoadingToken += 1
 		self:ExitLoadingState()
+
+		local pendingWeaponName = self.pendingPurchaseRefreshWeaponName or selectedWeaponName
+		self:RefreshPurchasedWeaponState(pendingWeaponName)
 	end
 
 	self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
@@ -1040,7 +1140,7 @@ function ShopUI:PurchaseCurrentItem()
 	end)
 
 	-- Our own validation passed, let's see if the server agrees
-	local success, message = Remotes.RequestPurchase:InvokeServer(selectedWeaponName)
+	local success, message = InvokeLogger.invokeServer(Remotes.RequestPurchase, selectedWeaponName)
 	if not success then
 		warn("Purchase failed:", message)
 		self:PlaySound("Error")
@@ -1088,7 +1188,7 @@ end
 
 function ShopUI:Init()
 	self:UpdateCurrencyDisplay(getCurrentMoney())
-	self.MainFrame.Level.Text = "LVL " .. tostring(getCurrentLevel())
+	self.MainFrame.Level.Text = "LVL " .. formatNumber(getCurrentLevel())
 	self:LoadFilters()
 	self:LoadSounds()
 	self:InitButtons()
@@ -1118,13 +1218,7 @@ function ShopUI:ListenForPurchase()
 	-- end)
 
 	self.purchaseConnection = Remotes.ItemPurchased.OnClientEvent:Connect(function(weaponName)
-		self:UpdateOwnedWeapons()
-		self:UpdateWeaponInfos()
-
-		if self.currentWeaponName == weaponName then
-			self:SelectWeapon(weaponName)
-		end
-
+		self:RefreshPurchasedWeaponState(weaponName)
 		self:UpdateCurrencyDisplay(credits.Value)
 	end)
 end
@@ -1285,7 +1379,7 @@ function ShopUI:Show(entering: boolean)
 		lockCamera()
 		self.baseCameraCFrame = self.CameraPart.CFrame
 		tweenCameraCFrame(self.CameraPart.CFrame)
-		self.ShopMusic:Play()
+
 		Player:SetAttribute("InShop", true)
 		self:LockCharacter()
 	end
@@ -1312,9 +1406,6 @@ function ShopUI:Hide(exitting: boolean, destroyAfterFade: boolean?)
 
 	if exitting then
 		returnCamera()
-		TweenService
-			:Create(self.ShopMusic, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Volume = 0 })
-			:Play()
 		Player:SetAttribute("InShop", false)
 	end
 

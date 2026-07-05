@@ -276,6 +276,14 @@ Module.isLoaded = function()
 	return Stores.loaded()
 end
 
+Module.isGamemodeLoaded = function()
+	return Stores.gamemodeLoaded()
+end
+
+Module.onGamemodeStoresLoaded = function(callback: () -> ())
+	Stores.onGamemodeStoresLoaded(callback)
+end
+
 --- Calling module.start() will start the module
 --- Calling module.test() will test a function of the module
 Module.start = start

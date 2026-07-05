@@ -564,7 +564,105 @@ end
 
 --- Initalization function
 local function start()
+	--- Register callback so existing players get gamemode stores added when they load
+	Core.onGamemodeStoresLoaded(supplementAllExistingPlayers)
+
 	debugPrint("Module is ready")
+end
+
+--- Adds gamemode-specific stores to an existing player's Data folder.
+--- @param userId number the player's user id
+local function supplementPlayerGamemodeData(userId: number)
+	local Player = Players:GetPlayerByUserId(userId)
+	if not Player then
+		return
+	end
+
+	local dataFolder = Player:FindFirstChild("Data")
+	if not dataFolder then
+		return
+	end
+
+	local flatFolder = dataFolder:FindFirstChild("FlatData") :: Folder?
+	local orderedFolder = dataFolder:FindFirstChild("OrderedData") :: Folder?
+	if not flatFolder or not orderedFolder then
+		return
+	end
+
+	local ORDERED_STORES = Core.getAllOrderedStores()
+	local FLAT_STORES = Core.getAllFlatStores()
+	local COLD_STORES = Core.getAllColdStores()
+
+	local function ensureStoreEntry(store: Store, defaultValue: any)
+		if Core.storeEntryExists(store.name, userId) then
+			return
+		end
+		Core.updateStoreEntry(store.name, userId, defaultValue)
+	end
+
+	for _, store: Store in ipairs(ORDERED_STORES) do
+		if not orderedFolder:FindFirstChild(store.name) then
+			ensureStoreEntry(store, 0)
+
+			local success, result = store:GetEntry(userId)
+			if success then
+				local newNumberValue = Instance.new("NumberValue", orderedFolder)
+				newNumberValue.Name = store.name
+				newNumberValue.Value = result
+				debugPrint("Supplemented ordered store", store.name, "for", Player.Name)
+			end
+		end
+	end
+
+	for _, store: Store in ipairs(FLAT_STORES) do
+		if not flatFolder:FindFirstChild(store.name) then
+			local scheme = Schema.getSchemaForStore(store.name)
+			ensureStoreEntry(store, scheme)
+
+			local success, result = store:GetEntry(userId)
+			if not success then
+				debugWarn("Unable to load store", store.name, "during supplement for", Player.Name)
+				continue
+			end
+
+			local schemeFolder: Folder
+			local success2, resultFolder = pcall(function()
+				schemeFolder = Schema.constructFolderFromEntryTable(store.name, scheme) :: Folder
+			end)
+
+			if not success2 then
+				debugWarn("Unable to create folder for", store.name, resultFolder)
+				continue
+			end
+
+			local values = schemeFolder:GetChildren()
+			for _, value in ipairs(values) do
+				if result[value.Name] ~= nil then
+					value.Value = result[value.Name]
+				end
+			end
+
+			schemeFolder.Parent = flatFolder
+			debugPrint("Supplemented flat store", store.name, "for", Player.Name)
+		end
+	end
+
+	for _, store: Store in ipairs(COLD_STORES) do
+		if not Core.storeEntryExists(store.name, userId) then
+			local scheme = Schema.getSchemaForStore(store.name)
+			Core.updateStoreEntry(store.name, userId, scheme)
+			debugPrint("Supplemented cold store", store.name, "for", Player.Name)
+		end
+	end
+end
+
+local function supplementAllExistingPlayers()
+	debugPrint("Supplementing existing player data with gamemode-specific stores")
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player:FindFirstChild("Data") then
+			supplementPlayerGamemodeData(player.UserId)
+		end
+	end
 end
 
 --- Runs a developer test on the module

@@ -33,6 +33,8 @@ Module._meta = {
 }
 
 local LOADED: boolean = false
+local GAMEMODE_LOADED: boolean = false
+local onGamemodeLoadedCallbacks: { () -> () } = {}
 
 --[[----------------------------------------------------------------------------------
 
@@ -45,6 +47,7 @@ local LOADED: boolean = false
 local Debug = require(DataAPI.Debug)
 local Types = require(DataAPI.Types)
 local ErrorModule = require(DataAPI.ErrorTypes)
+local Schema = require(DataAPI.Schema)
 
 --[[----------------------------------------------------------------------------------
 
@@ -138,14 +141,6 @@ local COLD_STORE_NAMES: { string } = {
 ----- IF USING FLAT STORE:
 ----- Once you added one above, please look into DataAPI > Schema and clone a module,
 ----- then arrange the data how you want it. Thanks!
-
---[[----------------------------------------------------------------------------------
-
-	Datastores
-
-]]
-----------------------------------------------------------------------------------
-
 --- Valid datastore types as a list
 --- @type {string} DatastoreType
 local DatastoreTypes = { "DataStore", "OrderedDataStore" }
@@ -153,6 +148,57 @@ local DatastoreTypes = { "DataStore", "OrderedDataStore" }
 local DATA_STORES: {
 	[DatastoreType]: { [string]: Store },
 } = {}
+
+--[[----------------------------------------------------------------------------------
+
+	Helpers
+
+]]
+
+---------------------------------------------------------------------------------
+
+--- Checks whether a store name is in any of the expected store name lists.
+--- @param storeName string the store name to check
+--- @return boolean expected whether it is a known store
+local function isExpectedStore(storeName: string): boolean
+	for _, name in ipairs(FLAT_STORE_NAMES) do
+		if name == storeName then
+			return true
+		end
+	end
+	for _, name in ipairs(COLD_STORE_NAMES) do
+		if name == storeName then
+			return true
+		end
+	end
+	for _, name in ipairs(ORDERED_STORE_NAMES) do
+		if name == storeName then
+			return true
+		end
+	end
+	return false
+end
+
+--- Raw store lookup without yielding. Returns nil if the store does not exist.
+--- @param name string the store name
+--- @param storeType DatastoreType? optional type hint
+--- @return Store? store the store object if found
+local function findStore(name: string, storeType: DatastoreType?): Store?
+	if storeType then
+		local list = DATA_STORES[storeType]
+		if list then
+			return list[name]
+		end
+		return nil
+	end
+
+	for _, nameList in pairs(DATA_STORES) do
+		if nameList[name] ~= nil then
+			return nameList[name]
+		end
+	end
+	return nil
+end
 
 --[[----------------------------------------------------------------------------------
 
@@ -178,32 +224,39 @@ end
 --- @return ValidDatastoreValue? the stored table value
 --- Use this for single-level table values only.
 --- For deeper paths, use GetNestedEntry.
---- Returns the store object with the given name and type if it exists. Errors if the store is missing
+--- Returns the store object with the given name and type if it exists. Errors if the store is missing.
+--- If the store is a known gamemode-specific store that hasn't loaded yet (waiting on workspace
+--- Gamemode attribute), yields until the gamemode stores are available.
 --- @param name string the name of the store
 --- @param storeType DatastoreType the type of store to get, if available, otherwise manually searches
 --- @return Store store the store object if it exists, or errors "StoreMissing"
 local function getStore(name: ValidStores | string, storeType: DatastoreType | nil): Store | nil
+	--- Try to find it quickly
+	local found = findStore(name, storeType)
+	if found then
+		return found
+	end
+
+	--- If the store is expected but pending gamemode loading, yield
+	if not GAMEMODE_LOADED and isExpectedStore(name) and Schema.isGamemodeSpecificStore(name) then
+		warn(`[DataAPI.Stores] Store "{name}" is pending gamemode attribute - yielding until loaded`)
+
+		while not GAMEMODE_LOADED do
+			task.wait(0.5)
+		end
+
+		found = findStore(name, storeType)
+		if found then
+			return found
+		end
+	end
+
+	--- Still not found - error
 	if storeType then
-		--- Attempt get the info via key
-		if DATA_STORES[storeType][name] == nil then
-			error(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
-			return nil
-		end
-
-		local dataInfo = DATA_STORES[storeType][name] :: Store?
-		return dataInfo
+		error(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
+	else
+		debugWarn(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
 	end
-
-	-- Manual search
-	for datastoreType, nameList in pairs(DATA_STORES) do
-		for dataName: string, store: Store in pairs(nameList) do
-			if dataName == name then
-				return store
-			end
-		end
-	end
-
-	debugWarn(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
 
 	return nil
 end
@@ -628,7 +681,7 @@ end
 local function getAllFlatStores(): { Store }
 	local stores = {}
 	for _, storeName in ipairs(FLAT_STORE_NAMES) do
-		local storeObj = getStore(storeName)
+		local storeObj = findStore(storeName, "DataStore")
 		if not storeObj then
 			continue
 		end
@@ -642,7 +695,7 @@ end
 local function getAllOrderedStores(): { Store }
 	local stores = {}
 	for _, storeName in ipairs(ORDERED_STORE_NAMES) do
-		local storeObj = getStore(storeName)
+		local storeObj = findStore(storeName, "OrderedDataStore")
 		if not storeObj then
 			continue
 		end
@@ -655,13 +708,32 @@ end
 local function getAllColdStores(): { Store }
 	local stores = {}
 	for _, storeName in ipairs(COLD_STORE_NAMES) do
-		local storeObj = getStore(storeName)
+		local storeObj = findStore(storeName, "DataStore")
 		if not storeObj then
 			continue
 		end
 		table.insert(stores, storeObj)
 	end
 	return stores
+end
+
+--- Returns the game specific store name
+local function getGameSpecificName(storeName: string): string
+	if Schema.isGamemodeSpecificStore(storeName) then
+		local currentGamemode = workspace:GetAttribute("Gamemode")
+
+		if currentGamemode == "Sandbox" then
+			currentGamemode = ""
+		else
+			currentGamemode = `_{currentGamemode}`
+		end
+
+		print(`{storeName}{currentGamemode}`)
+		return `{storeName}{currentGamemode}`
+	end
+
+	print(storeName)
+	return storeName
 end
 
 --[[----------------------------------------------------------------------------------
@@ -776,7 +848,61 @@ Module.getAllColdStores = getAllColdStores
 ]]
 ----------------------------------------------------------------------------------
 
+--- Creates gamemode-specific DataStore wrappers after the workspace Gamemode attribute
+--- has been set. Called automatically by load() when the attribute changes.
+local function loadGamemodeStores()
+	debugPrint("🟡🟡 Loading gamemode-specific stores 🟡🟡")
+
+	local success, result = pcall(function()
+		for _, storeName: string in ipairs(FLAT_STORE_NAMES) do
+			if Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "DataStore")
+				debugPrint("Created:", store.__tostring)
+			end
+		end
+
+		for _, storeName: string in ipairs(COLD_STORE_NAMES) do
+			if Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "DataStore")
+				debugPrint("Created:", store.__tostring)
+			end
+		end
+
+		for _, storeName: string in ipairs(ORDERED_STORE_NAMES) do
+			if Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetOrderedDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "OrderedDataStore")
+				debugPrint("Created:", store.__tostring)
+			end
+		end
+	end)
+
+	if not success then
+		debugWarn("🔴🔴 Could not create gamemode-specific Datastores! 🔴🔴", result)
+		return
+	end
+
+	GAMEMODE_LOADED = true
+	debugPrint("🟢🟢 Gamemode-specific stores fully loaded 🟢🟢")
+
+	--- Fire callbacks so downstream systems (e.g. Manager) can re-sync existing players
+	for _, cb in ipairs(onGamemodeLoadedCallbacks) do
+		task.spawn(cb)
+	end
+end
+
 --- Initalization function
+--- Phase 1: loads non-gamemode-specific stores immediately so Preferences are available.
+--- Phase 2: registers a listener on workspace:GetAttribute("Gamemode"); when it becomes
+--- non-empty the gamemode-specific stores are created.
 local function load()
 	debugPrint("🟡🟡 Beginning Data API Build 🟡🟡")
 
@@ -785,34 +911,65 @@ local function load()
 		DATA_STORES[validType] = {}
 	end
 
-	--- Attempt to load each datastore
+	--- Phase 1: load non-gamemode-specific stores only
 	local success, result = pcall(function()
 		for _, storeName: string in ipairs(FLAT_STORE_NAMES) do
-			local dataStore: AllowedStoreTypes = DatastoreService:GetDataStore(storeName .. DATASTORE_VERSION)
-			local store: Store = createStore(storeName, dataStore, "DataStore")
-			debugPrint("Created:", store.__tostring)
+			if not Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "DataStore")
+				debugPrint("Created:", store.__tostring)
+			end
 		end
 
 		for _, storeName: string in ipairs(COLD_STORE_NAMES) do
-			local dataStore: AllowedStoreTypes = DatastoreService:GetDataStore(storeName .. DATASTORE_VERSION)
-			local store: Store = createStore(storeName, dataStore, "DataStore")
-			debugPrint("Created:", store.__tostring)
+			if not Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "DataStore")
+				debugPrint("Created:", store.__tostring)
+			end
 		end
 
 		for _, storeName: string in ipairs(ORDERED_STORE_NAMES) do
-			local dataStore: AllowedStoreTypes = DatastoreService:GetOrderedDataStore(storeName .. DATASTORE_VERSION)
-			local store: Store = createStore(storeName, dataStore, "OrderedDataStore")
-			debugPrint("Created:", store.__tostring)
+			if not Schema.isGamemodeSpecificStore(storeName) then
+				local updatedStoreName = getGameSpecificName(storeName)
+				local dataStore: AllowedStoreTypes =
+					DatastoreService:GetOrderedDataStore(updatedStoreName .. DATASTORE_VERSION)
+				local store: Store = createStore(storeName, dataStore, "OrderedDataStore")
+				debugPrint("Created:", store.__tostring)
+			end
 		end
 	end)
 
 	if not success then
-		debugWarn("🔴🔴 Could not create Datastores! 🔴🔴", result)
+		debugWarn("🔴🔴 Could not create base Datastores! 🔴🔴", result)
 		return
 	end
 
-	debugPrint("🟢🟢 DATA API FULLY LOADED 🟢🟢")
+	debugPrint("🟢🟢 Base stores loaded — Data API operational 🟢🟢")
 	LOADED = true
+
+	--- Phase 2: schedule gamemode-specific stores
+	if not GAMEMODE_LOADED then
+		local currentGamemode = workspace:GetAttribute("Gamemode")
+		if currentGamemode and currentGamemode ~= "" then
+			--- Already set, load immediately
+			loadGamemodeStores()
+		else
+			--- Wait for it to be set
+			local connection: RBXScriptConnection
+			connection = workspace:GetAttributeChangedSignal("Gamemode"):Connect(function()
+				local newGamemode = workspace:GetAttribute("Gamemode")
+				if newGamemode and newGamemode ~= "" then
+					connection:Disconnect()
+					task.spawn(loadGamemodeStores)
+				end
+			end)
+		end
+	end
 end
 
 --- Runs a developer test on the module
@@ -827,6 +984,17 @@ local function test() end
 
 Module.loaded = function()
 	return LOADED
+end
+
+Module.gamemodeLoaded = function()
+	return GAMEMODE_LOADED
+end
+
+Module.onGamemodeStoresLoaded = function(callback: () -> ())
+	table.insert(onGamemodeLoadedCallbacks, callback)
+	if GAMEMODE_LOADED then
+		task.spawn(callback)
+	end
 end
 
 --- Calling module.start() will start the module

@@ -11,7 +11,13 @@ local ShopBindables = ServerStorage.ShopBindables
 local DataAPI = require(game.ServerScriptService.DataAPI.API)
 
 local MODULE_INFOS: { [string]: {} } = {}
+local MODULE_INFOS_BY_LOOKUP_KEY: { [string]: {} } = {}
 local MODULES_BY_CATEGORY: { [string]: { [string]: {} } } = {}
+local CATEGORY_FOLDERS: { [string]: boolean } = {
+	Gun = true,
+	Melee = true,
+	Armor = true,
+}
 local OWNED_ITEMS_CACHE_TTL_SECONDS = 2
 local OWNED_ITEMS_CACHE: { [number]: { items: { string }, expiresAt: number } } = {}
 local cleanupBound = false
@@ -32,6 +38,11 @@ local function normalizeLower(value: string?): string
 		return ""
 	end
 	return string.lower(value)
+end
+
+local function normalizeLookupKey(value: string?): string
+	local lowered = normalizeLower(value)
+	return (string.gsub(lowered, "[^%w]", ""))
 end
 
 local function matchesWeight(info: WeaponInfo, weightsQuery: Weight | { Weight }?): boolean
@@ -279,16 +290,47 @@ local function toResultShape(infos: { WeaponInfo }, query: Query?, defaultReturn
 	return output
 end
 
-local function getInfo(moduleName: string): WeaponInfo?
+local function cacheInfo(moduleName: string, info: WeaponInfo)
+	MODULE_INFOS[moduleName] = info
+	MODULE_INFOS_BY_LOOKUP_KEY[normalizeLookupKey(moduleName)] = info
+	MODULE_INFOS_BY_LOOKUP_KEY[normalizeLookupKey(info.Name)] = info
+
+	if not MODULES_BY_CATEGORY[info.Category] then
+		MODULES_BY_CATEGORY[info.Category] = {}
+	end
+	MODULES_BY_CATEGORY[info.Category][moduleName] = info
+end
+
+local function getInfo(moduleScriptOrName: any): WeaponInfo?
+	if type(moduleScriptOrName) == "string" then
+		local cachedByName = MODULE_INFOS_BY_LOOKUP_KEY[normalizeLookupKey(moduleScriptOrName)]
+		if cachedByName then
+			return cachedByName :: WeaponInfo
+		end
+
+		for _, descendant in ipairs(ItemInfo:GetDescendants()) do
+			if descendant:IsA("ModuleScript") then
+				local lookupKey = normalizeLookupKey(descendant.Name)
+				if lookupKey == normalizeLookupKey(moduleScriptOrName) then
+					return getInfo(descendant)
+				end
+			end
+		end
+
+		warn("No item info module found for: " .. moduleScriptOrName)
+		return nil
+	end
+
+	if typeof(moduleScriptOrName) ~= "Instance" or not moduleScriptOrName:IsA("ModuleScript") then
+		warn("Invalid module script: " .. tostring(moduleScriptOrName))
+		return nil
+	end
+
+	local moduleScript = moduleScriptOrName :: ModuleScript
+	local moduleName = moduleScript.Name
 	local cached = MODULE_INFOS[moduleName]
 	if cached then
 		return cached :: WeaponInfo
-	end
-
-	local moduleScript = ItemInfo:FindFirstChild(moduleName)
-	if not moduleScript then
-		warn("Module not found: " .. moduleName)
-		return nil
 	end
 
 	local info = require(moduleScript) :: WeaponInfo
@@ -297,13 +339,19 @@ local function getInfo(moduleName: string): WeaponInfo?
 		return nil
 	end
 
-	MODULE_INFOS[moduleName] = info
-	if not MODULES_BY_CATEGORY[info.Category] then
-		MODULES_BY_CATEGORY[info.Category] = {}
-	end
-	MODULES_BY_CATEGORY[info.Category][moduleName] = info
+	cacheInfo(moduleName, info)
 
 	return info
+end
+
+local function loadItemInfoContainer(container: Instance)
+	for _, child in ipairs(container:GetChildren()) do
+		if child:IsA("ModuleScript") then
+			getInfo(child)
+		elseif child:IsA("Folder") and CATEGORY_FOLDERS[child.Name] then
+			loadItemInfoContainer(child)
+		end
+	end
 end
 
 local function queryCategory(category: string, query: Query?): any
@@ -388,6 +436,10 @@ local function getOwnedItems(player: Player): { string }
 	}
 
 	return table.clone(ownedItems)
+end
+
+local function invalidateOwnedItemsCache(userId: number)
+	OWNED_ITEMS_CACHE[userId] = nil
 end
 
 local function getWeaponInfoInvoke(firstArg: any, secondArg: any, thirdArg: any)
@@ -476,9 +528,7 @@ function Queries.load()
 		end)
 	end
 
-	for _, module in ipairs(ItemInfo:GetChildren()) do
-		getInfo(module.Name)
-	end
+	loadItemInfoContainer(ItemInfo)
 
 	ShopRemotes.GetWeaponInfo.OnServerInvoke = getWeaponInfoInvoke
 	ShopRemotes.GetAllInfoForCategory.OnServerInvoke = getAllInfoForCategoryInvoke
@@ -490,5 +540,7 @@ function Queries.load()
 	ShopBindables:WaitForChild("GetWeaponInfo").OnInvoke = getWeaponInfoInvoke
 	ShopBindables:WaitForChild("GetAllInfoForCategory").OnInvoke = getAllInfoForCategoryInvoke
 end
+
+Queries.invalidateOwnedItemsCache = invalidateOwnedItemsCache
 
 return Queries

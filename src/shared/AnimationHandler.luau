@@ -15,11 +15,12 @@ function AnimationHandler.new(character: Model): AnimationHandler
 	local humanoid = character:FindFirstChildWhichIsA("Humanoid")
 	self.Animator = humanoid and humanoid.Animator or nil
 	self.Animations = {}
+	self.CoreNames = {}
 
 	return self
 end
 
-function AnimationHandler:LoadAnimation(id: string, name: string): AnimationTrack?
+function AnimationHandler:LoadAnimation(id: string, name: string, registerCore: boolean?): AnimationTrack?
 	local animation = Instance.new("Animation")
 	animation.AnimationId = id
 
@@ -27,11 +28,18 @@ function AnimationHandler:LoadAnimation(id: string, name: string): AnimationTrac
 	track.Name = name
 	self.Animations[name] = track
 
+	if registerCore == true then
+		-- print("Core", name)
+		self.CoreNames[name] = true
+	else
+		self.CoreNames[name] = false
+	end
+
 	return track
 end
 
-function AnimationHandler:LoadAnimationById(id: number, name: string): AnimationTrack?
-	return self:LoadAnimation(`rbxassetid://{id}`, name)
+function AnimationHandler:LoadAnimationById(id: number, name: string, registerCore: boolean?): AnimationTrack?
+	return self:LoadAnimation(`rbxassetid://{id}`, name, registerCore == true)
 end
 
 function AnimationHandler:Play(name: string, fadeTime: number?, weight: number?, speed: number?): AnimationTrack?
@@ -50,9 +58,14 @@ function AnimationHandler:Stop(name: string, fadeTime: number?)
 	end
 end
 
+function AnimationHandler:IsCoreAnimation(name: string): boolean
+	return self.CoreNames[name] == true
+end
+
 function AnimationHandler:UnloadAll()
+	-- print("unload all")
 	for _, track in self.Animations do
-		if track.Name == "Idle" then
+		if self:IsCoreAnimation(track.Name) then
 			continue
 		end
 
@@ -65,9 +78,10 @@ end
 
 function AnimationHandler:StopAll(fadeTime: number?)
 	for _, track in self.Animations do
-		if track.Name == "Idle" then
+		if self:IsCoreAnimation(track.Name) then
 			continue
 		end
+
 		track:Stop(fadeTime)
 	end
 end

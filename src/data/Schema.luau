@@ -126,6 +126,21 @@ local function isServedStore(dataStoreName: ValidStores | string): boolean
 	return scheme._served == true
 end
 
+--- Returns whether the store is game mode specific
+--- @param dataStoreName string the name of the store to inspect
+--- @return boolean uniquePerGamemode whether the store is unique per gamemode
+local function isGamemodeSpecificStore(dataStoreName: ValidStores | string): boolean
+	local scheme = getSchemaForStore(dataStoreName)
+	if not scheme or not next(scheme) then
+		return true -- likely ordered with no schema, default to gamemode-specific
+	end
+
+	if scheme._uniquePerGamemode == nil then
+		return false
+	end
+	return scheme._uniquePerGamemode == true
+end
+
 --- Creates a list of instance values based on an array of data and returns the list
 --- Returns dynamic value instances based on the value of inputTable[x]
 --- Assumes the key is a string for the name of the value, is a string, number, or bool value-wise
@@ -234,6 +249,7 @@ end
 Module.schemeExists = schemeExists
 Module.getSchemaForStore = getSchemaForStore
 Module.isServedStore = isServedStore
+Module.isGamemodeSpecificStore = isGamemodeSpecificStore
 Module.tableToInstances = tableToInstances
 Module.instancesToTable = instancesToTable
 Module.constructFolderFromEntryTable = constructFolderFromEntryTable

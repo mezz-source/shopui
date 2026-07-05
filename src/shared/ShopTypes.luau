@@ -61,6 +61,7 @@ export type WeaponChoice = {
 	Name: string,
 	Weight: string,
 	PreviewImage: string,
+	IsTorsoDominant: boolean,
 	Button: TextButton,
 }
 
@@ -95,6 +96,8 @@ export type WeaponInfo = {
 	Consumable: boolean,
 	MaxStack: number?,
 	PreviewImage: string,
+	PreviewCameraOffset: Vector3?,
+	PreviewModelOrientationOffset: Vector3?,
 	ItemInfo: ItemInfo,
 	Pills: { Pill },
 }
