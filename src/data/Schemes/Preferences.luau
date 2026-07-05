@@ -1,0 +1,15 @@
+return {
+	_version = "1.1.0",
+	_served = true,
+	SunRays = true,
+	CameraSway = true,
+	Materials = true,
+	DoomMusic = true,
+	ShowDamageAmount = true,
+	HealthBars = true,
+	DepthOfField = true,
+	KillFeed = true,
+	Shadows = true,
+	LevelBar = true,
+	ShowNamePlate = false,
+}

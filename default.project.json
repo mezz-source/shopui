@@ -12,6 +12,15 @@
     "ServerScriptService": {
       "ShopServer": {
         "$path": "src/server"
+      },
+      "DataAPI": {
+        "$path": "src/data"
+      }
+    },
+
+    "ServerStorage": {
+      "ShopStorage": {
+        "$path": "src/storage"
       }
     },
 

@@ -6,81 +6,35 @@ local Players = game:GetService("Players")
 local Player = Players.LocalPlayer
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
 local GUIs = ReplicatedStorage:WaitForChild("GUIs")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
 local RemoteInfo = Remotes:WaitForChild("GetWeaponInfo")
 local RemoteInfoAll = Remotes:WaitForChild("GetAllInfoForCategory")
+local GetGunSettings = Remotes:WaitForChild("GetGunSettings")
+local GetMeleeSettings = Remotes:WaitForChild("GetMeleeSettings")
 
 local WeaponPreviews = ReplicatedStorage:WaitForChild("WeaponPreview")
 
 local ShopInfos = ReplicatedStorage.ShopClient.ShopInfos
+local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
+local GunScoring = require(script.Parent.Parent.GunScoring)
+local MeleeScoring = require(script.Parent.Parent.MeleeScoring)
 
 local Shops = workspace:WaitForChild("Shops")
 
-type Category = "Gun" | "Melee" | "Armor"
-type Weight = "Light" | "Moderate" | "Heavy"
-
-type Pill = { Text: string, Color: Color3 }
-
-type FilterInfo = {
-	FilterType: string,
-	Name: string,
-	Order: number,
-	Image: string?,
-}
-
-type ShopInfo = {
-	Name: string,
-	Category: Category,
-	Filters: { FilterInfo },
-}
-
-type ArmorInfo = {
-	BulletResistance: number,
-	SharpResistance: number,
-	BluntResistance: number,
-	ArmorType: string,
-}
-
-type MeleeInfo = {
-	Damage: number,
-	SwingDebounce: number,
-	DamageType: string,
-}
-
-type GunInfo = {
-	FireType: "Auto" | "Semi" | "Burst",
-	Damage: number,
-	Firerate: number,
-	Bullets: number,
-	BulletSpeed: number,
-	Spread: number,
-	Range: number,
-	ReloadTime: number,
-	ZoomFOV: number,
-	Recoil: number, -- 10 low, 30 moderate, 50 high
-	HeadshotMultiplier: number,
-	DamageType: string,
-}
-
-type WeaponInfo = {
-	Name: string,
-	Category: Category,
-	Weight: Weight,
-	Price: number,
-	Level: number,
-	Lore: string,
-	SpecialText: string,
-	GroupUnlocked: boolean,
-	Consumable: boolean,
-	MaxStack: number?,
-	PreviewImage: string,
-	ItemInfo: ArmorInfo | MeleeInfo | GunInfo,
-	Pills: { Pill },
-}
+type Category = ShopTypes.Category
+type Weight = ShopTypes.Weight
+type Pill = ShopTypes.Pill
+type FilterInfo = ShopTypes.FilterInfo
+type ShopInfo = ShopTypes.ShopInfo
+type ArmorInfo = ShopTypes.ArmorInfo
+type MeleeInfo = ShopTypes.MeleeInfo
+type GunInfo = ShopTypes.GunInfo
+type WeaponInfo = ShopTypes.WeaponInfo
 
 local DAMAGE_TYPE_TO_COLOR = {
 	Bullet = Color3.new(0.8, 0.8, 0.8),
@@ -99,6 +53,8 @@ local SOUND_MAP = {
 
 local CAMERA_MOUSE_INFLUENCE = 0.24
 local CAMERA_LERP_ALPHA = 0.01
+local PURCHASE_LOADING_DELAY = 0.1
+local CURRENCY_ANIMATION_DURATION = 0.8
 
 local function clamp01(value: number): number
 	if value < 0 then
@@ -110,72 +66,7 @@ local function clamp01(value: number): number
 	return value
 end
 
-local function normalized(value: number, minValue: number, maxValue: number): number
-	if maxValue <= minValue then
-		return 0
-	end
-	return clamp01((value - minValue) / (maxValue - minValue))
-end
-
-local function firerateToShotsPerSecond(firerate: number): number
-	if firerate <= 0 then
-		return 0
-	end
-
-	-- Support common formats:
-	-- 1) rounds-per-minute values (usually >= 20)
-	-- 2) seconds-per-shot values (usually < 1)
-	-- 3) already shots-per-second values (everything else)
-	if firerate >= 20 then
-		return firerate / 60
-	end
-
-	if firerate < 1 then
-		return 1 / firerate
-	end
-
-	return firerate
-end
-
-local function scoreZoomFOV(zoomFOV: number): number
-	-- 20-40 is the strong/"decent" range, but sub-20 should still visibly register.
-	if zoomFOV <= 20 then
-		return normalized(zoomFOV, 0, 20) * 0.45
-	end
-
-	if zoomFOV <= 40 then
-		return 0.45 + normalized(zoomFOV, 20, 40) * 0.45
-	end
-
-	return 0.9 + normalized(zoomFOV, 40, 55) * 0.1
-end
-
-local GUN_BASELINES = {
-	Auto = {
-		damage = { min = 10, max = 42 },
-		firerate = { min = 3.5, max = 14 },
-		dps = { min = 55, max = 300 },
-		recoil = { min = 8, max = 48 },
-		clip = { min = 18, max = 60 },
-		reload = { min = 1.7, max = 3.8 },
-	},
-	Semi = {
-		damage = { min = 18, max = 75 },
-		firerate = { min = 1.6, max = 8 },
-		dps = { min = 45, max = 260 },
-		recoil = { min = 10, max = 55 },
-		clip = { min = 6, max = 26 },
-		reload = { min = 1.5, max = 3.4 },
-	},
-	Burst = {
-		damage = { min = 14, max = 52 },
-		firerate = { min = 2.4, max = 10.5 },
-		dps = { min = 70, max = 320 },
-		recoil = { min = 9, max = 52 },
-		clip = { min = 12, max = 36 },
-		reload = { min = 1.6, max = 3.6 },
-	},
-}
+---------
 
 local function _getShopInfo(shopName: string): ShopInfo
 	local info = ShopInfos:FindFirstChild(shopName)
@@ -211,6 +102,24 @@ local function returnCamera()
 	Camera.CameraType = Enum.CameraType.Custom
 end
 
+local function getEnabledCoreGuis(): { Enum.CoreGuiType }
+	local enabledCoreGuis = {}
+
+	for _, coreGuiType in ipairs(Enum.CoreGuiType:GetEnumItems()) do
+		if coreGuiType ~= Enum.CoreGuiType.All and coreGuiType ~= Enum.CoreGuiType.ExperienceShop then
+			local success, enabled = pcall(function()
+				return StarterGui:GetCoreGuiEnabled(coreGuiType)
+			end)
+
+			if success and enabled then
+				table.insert(enabledCoreGuis, coreGuiType)
+			end
+		end
+	end
+
+	return enabledCoreGuis
+end
+
 local function tweenCameraCFrame(newCFrame: CFrame)
 	local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 	local tween = TweenService:Create(Camera, tweenInfo, { CFrame = newCFrame })
@@ -219,13 +128,19 @@ end
 
 local function getCurrentMoney()
 	local leaderstats = Player:WaitForChild("leaderstats")
-	local Money = leaderstats:WaitForChild("Money")
+	local Money = leaderstats:WaitForChild("Credits")
 	return Money.Value
+end
+
+local function getCurrentLevel()
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local Level = leaderstats:WaitForChild("Level")
+	return Level.Value
 end
 
 local function shouldBeLocked(requiredLevel: number, requiredMoney: number): { isUnlocked: boolean, reason: string }
 	local leaderstats = Player:WaitForChild("leaderstats")
-	local Money = leaderstats:WaitForChild("Money")
+	local Money = leaderstats:WaitForChild("Credits")
 	local Level = leaderstats:WaitForChild("Level")
 
 	local Reason = ""
@@ -244,34 +159,52 @@ local function shouldBeLocked(requiredLevel: number, requiredMoney: number): { i
 	return { isUnlocked = Unlocked, reason = Reason }
 end
 
-function ShopUI.new(shopModelName: string)
-	local Shop = Shops:FindFirstChild(shopModelName)
-	if not Shop then
-		warn(`No shop named {shopModelName} was found, could not create shop`)
-		return
+function ShopUI.new(
+	shopModelName: string?,
+	options: { gui: Instance?, autoStart: boolean?, onExitRequested: (() -> ())? }?
+)
+	local shopOptions = options :: { gui: Instance?, autoStart: boolean?, onExitRequested: (() -> ())? }?
+	local self = setmetatable({}, ShopUI)
+	local shopGui = if shopOptions and shopOptions.gui then shopOptions.gui else GUIs.Shop:Clone()
+	local autoStart = if shopOptions == nil or shopOptions.autoStart == nil then true else shopOptions.autoStart
+
+	if shopGui.Parent == nil then
+		shopGui.Parent = Player.PlayerGui
 	end
 
-	assert(Shop:FindFirstChild("ShopMusic"), "No shop music")
-	assert(Shop:FindFirstChild("Shop"), "No shop model")
-	assert(Shop:FindFirstChild("CameraPart"), "No camera part")
-
-	local self = setmetatable({}, ShopUI)
-	local shopGui = GUIs.Shop:Clone()
-	shopGui.Parent = Player.PlayerGui
-	self.shopInfo = _getShopInfo(shopModelName)
 	self.gui = shopGui
 	self.sounds = {}
+	self.started = false
+	self.onExitRequested = if shopOptions then shopOptions.onExitRequested else nil
+	self.shopInfo = nil
 
-	self.CameraPart = Shop.CameraPart
-	self.ShopMusic = Shop.ShopMusic
-	self.ShopMusic.Volume = 0.3
-
-	self.ShopModel = Shop.Shop
+	self.CameraPart = nil
+	self.ShopMusic = nil
+	self.ShopModel = nil
 	self.ShopName = shopModelName
 
-	local UIFrame = self.gui.Main.UI
+	if shopModelName then
+		local Shop = Shops:FindFirstChild(shopModelName)
+		if not Shop then
+			warn(`No shop named {shopModelName} was found, could not create shop`)
+			return self
+		end
 
-	local MenuOptions = UIFrame.MenuOptions.Options
+		assert(Shop:FindFirstChild("ShopMusic"), "No shop music")
+		assert(Shop:FindFirstChild("Shop"), "No shop model")
+		assert(Shop:FindFirstChild("CameraPart"), "No camera part")
+
+		self.shopInfo = _getShopInfo(shopModelName)
+		self.CameraPart = Shop.CameraPart
+		self.ShopMusic = Shop.ShopMusic
+		self.ShopMusic.Volume = 0.3
+
+		self.ShopModel = Shop.Shop
+	end
+
+	local UIFrame = self.gui.UI
+	local LoadingFrame = self.gui.Loading
+	local LoadingIcon = LoadingFrame.LoadingIcon
 
 	local WeaponInfo = UIFrame.WeaponInfo :: Frame
 	local LoreBox = WeaponInfo.LoreBox :: Frame
@@ -290,9 +223,15 @@ function ShopUI.new(shopModelName: string)
 	local Pills = WeaponStats.Pills :: Frame
 	local ExitButton = UIFrame.Exit :: TextButton
 	local _CurrencyOwnedText = UIFrame.CurrencyOwned :: TextLabel
+	local _Level = UIFrame.Level :: TextLabel
+
+	local LeftFilter = Filters.LeftFrame.Left :: ImageButton
+	local RightFilter = Filters.RightFrame.Right :: ImageButton
+
+	self.LoadingFrame = LoadingFrame
+	self.LoadingIcon = LoadingIcon
 
 	self.MainFrame = UIFrame
-	self.MenuOptions = MenuOptions
 	self.WeaponInfo = WeaponInfo
 	self.WeaponPreview = WeaponPreview
 	self.WeaponSelection = WeaponSelection
@@ -306,13 +245,43 @@ function ShopUI.new(shopModelName: string)
 
 	self.ScrollingFrame = ScrollingFrame
 	self.Filters = Filters
+	self.LeftFilter = LeftFilter
+	self.RightFilter = RightFilter
 
 	self.Bars = Bars
 	self.Pills = Pills
 	self.Exit = ExitButton
+	self.Exit.MouseButton1Down:Connect(function()
+		if self.purchaseInProgress then
+			warn("Can't exit while purchase is in progress")
+			self:PlaySound("Error")
+			return
+		end
+
+		if self.onExitRequested then
+			self.onExitRequested()
+		else
+			self:Hide(true)
+		end
+	end)
 
 	self.alive = false
 	self.currentFilter = ""
+	self.currentFilterIndex = 0
+	self.currentFilterName = nil
+	self.filterFrames = {}
+	self.filterInfos = {}
+	self.enabledCoreGuis = nil
+	self.characterAddedConnection = nil
+	self.characterDiedConnection = nil
+	self.lockedCharacter = nil
+	self.lockedHumanoid = nil
+	self.lockedRootPart = nil
+	self.originalWalkSpeed = nil
+	self.originalJumpPower = nil
+	self.originalJumpHeight = nil
+	self.originalAutoRotate = nil
+	self.originalRootAnchored = nil
 
 	local previewCamera = Instance.new("Camera")
 	previewCamera.CFrame = CFrame.new(Vector3.zero)
@@ -336,10 +305,217 @@ function ShopUI.new(shopModelName: string)
 	self.MainFrame.Position = UDim2.new(0.5, 0, 2, 0)
 	self.baseCameraCFrame = self.CameraPart.CFrame
 	self.connection = nil
+	self.purchaseConnection = nil
+	self.currencyConnection = nil
+	self.purchaseInProgress = false
+	self.purchaseLoadingToken = 0
+	self.currencyAnimationToken = 0
+	self.currentCurrencyAmount = nil
+	self.ownedItems = {}
+	self.currentWeaponInfoButtons = {}
+	self.currentWeaponName = nil
 
-	self:Init()
+	if autoStart and self.shopInfo then
+		self:Start()
+	end
 
 	return self
+end
+
+function ShopUI:Start()
+	if self.started then
+		return
+	end
+
+	if not self.shopInfo or not self.CameraPart or not self.ShopMusic or not self.ShopModel then
+		warn("ShopUI cannot start without a valid shop model")
+		return
+	end
+
+	self.started = true
+	self:Init()
+end
+
+function ShopUI:UpdateOwnedWeapons()
+	local ownedItems = Remotes.GetOwnedItems:InvokeServer() :: { string }
+	if not ownedItems then
+		warn("No owned items provided")
+		return
+	end
+
+	self.ownedItems = ownedItems
+end
+
+function ShopUI:UpdateCurrencyDisplay(targetAmount: number)
+	local currencyText = self.MainFrame.CurrencyOwned :: TextLabel
+	local currentAmount = self.currentCurrencyAmount
+
+	if currentAmount == nil then
+		self.currentCurrencyAmount = targetAmount
+		currencyText.Text = "※ " .. tostring(targetAmount)
+		return
+	end
+
+	self.currencyAnimationToken += 1
+	local currencyAnimationToken = self.currencyAnimationToken
+	local startAmount = currentAmount
+
+	if targetAmount >= startAmount then
+		self.currentCurrencyAmount = targetAmount
+		currencyText.Text = "※ " .. tostring(targetAmount)
+		return
+	end
+
+	task.spawn(function()
+		local startTime = os.clock()
+		local duration = CURRENCY_ANIMATION_DURATION
+
+		while self.alive and self.currencyAnimationToken == currencyAnimationToken do
+			local progress = math.clamp((os.clock() - startTime) / duration, 0, 1)
+			local easedProgress = 1 - (1 - progress) ^ 3
+			local displayedAmount = math.floor(startAmount + (targetAmount - startAmount) * easedProgress + 0.5)
+
+			self.currentCurrencyAmount = displayedAmount
+			currencyText.Text = "※ " .. tostring(displayedAmount)
+
+			if progress >= 1 then
+				break
+			end
+
+			task.wait()
+		end
+
+		if self.currencyAnimationToken == currencyAnimationToken then
+			self.currentCurrencyAmount = targetAmount
+			currencyText.Text = "※ " .. tostring(targetAmount)
+		end
+	end)
+end
+
+function ShopUI:OwnsWeapon(weaponName: string): boolean
+	return table.find(self.ownedItems, weaponName) ~= nil
+end
+
+function ShopUI:ResetWeaponFrameState(weaponFrame)
+	local title = weaponFrame.Title :: TextLabel
+	local cost = weaponFrame.Cost :: TextLabel
+	local level = weaponFrame.Level :: TextLabel
+	local image = weaponFrame.ImageLabel :: ImageLabel
+
+	title.BackgroundColor3 = Color3.new(1, 1, 1)
+	title.TextColor3 = Color3.new(1, 1, 1)
+	cost.TextColor3 = Color3.new(1, 1, 1)
+	level.TextColor3 = Color3.new(1, 1, 1)
+	image.ImageColor3 = Color3.new(1, 1, 1)
+	image.ImageTransparency = 0
+end
+
+function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
+	self:ResetWeaponFrameState(weaponFrame)
+
+	local title = weaponFrame.Title :: TextLabel
+	local cost = weaponFrame.Cost :: TextLabel
+	local level = weaponFrame.Level :: TextLabel
+	local image = weaponFrame.ImageLabel :: ImageLabel
+
+	if self:OwnsWeapon(weaponInfo.Name) then
+		title.BackgroundColor3 = Color3.new(0.062745, 0.2, 0.062745)
+		title.TextColor3 = Color3.new(0, 1, 0)
+		cost.TextColor3 = Color3.new(0, 1, 0)
+		level.TextColor3 = Color3.new(0, 1, 0)
+		image.ImageColor3 = Color3.new(0, 1, 0)
+		image.ImageTransparency = 0.5
+		return
+	else
+		title.TextColor3 = Color3.new(0, 0, 0)
+	end
+
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if result.isUnlocked then
+		return
+	end
+
+	local reason = result.reason
+	if reason == "MoneyLevel" then
+		level.TextColor3 = Color3.new(1, 0, 0)
+		cost.TextColor3 = Color3.new(1, 0, 0)
+	elseif reason == "Money" then
+		cost.TextColor3 = Color3.new(1, 0, 0)
+	elseif reason == "Level" then
+		level.TextColor3 = Color3.new(1, 0, 0)
+	end
+
+	image.ImageTransparency = 0.5
+	title.BackgroundColor3 = Color3.new(1, 0, 0)
+end
+
+function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
+	self.PurchaseArea.Visible = true
+	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
+	self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+
+	if self:OwnsWeapon(weaponInfo.Name) then
+		self.PurchaseButton.Text = "OWNED"
+		self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
+		return
+	end
+
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if result.isUnlocked then
+		return
+	end
+
+	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
+	if result.reason == "MoneyLevel" then
+		self.PurchaseButton.Text = "※ " .. weaponInfo.Price .. " | LVL " .. weaponInfo.Level
+	elseif result.reason == "Money" then
+		self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+	elseif result.reason == "Level" then
+		self.PurchaseButton.Text = "LVL " .. weaponInfo.Level
+	end
+end
+
+function ShopUI:ExitLoadingState()
+	local backgroundTween = TweenService:Create(
+		self.LoadingFrame,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 1 }
+	)
+
+	local iconTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ ImageTransparency = 1 }
+	)
+
+	iconTween:Play()
+	backgroundTween:Play()
+end
+
+function ShopUI:StartLoadingState()
+	self.LoadingIcon.Position = UDim2.new(0.5, 0, 0.6, 0)
+	self.LoadingIcon:TweenPosition(
+		UDim2.new(0.5, 0, 0.5, 0),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quint,
+		0.4,
+		true
+	)
+
+	local backgroundTween = TweenService:Create(
+		self.LoadingFrame,
+		TweenInfo.new(0.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 0.5 }
+	)
+
+	local iconTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ ImageTransparency = 0 }
+	)
+
+	iconTween:Play()
+	backgroundTween:Play()
 end
 
 function ShopUI:ClearWeaponPreview()
@@ -463,43 +639,52 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 	end
 
 	if weaponInfo.Category == "Gun" then
-		local gunInfo = weaponInfo.ItemInfo :: GunInfo
-		local baseline = GUN_BASELINES[gunInfo.FireType] or GUN_BASELINES.Auto
-		local shotsPerSecond = firerateToShotsPerSecond(gunInfo.Firerate)
-		local estimatedDPS = gunInfo.Damage * shotsPerSecond
-
-		local rawDamageScore = normalized(gunInfo.Damage, baseline.damage.min, baseline.damage.max)
-		local dpsDamageScore = normalized(estimatedDPS, baseline.dps.min, baseline.dps.max)
-		local damageScore = clamp01(rawDamageScore * 0.4 + dpsDamageScore * 0.6)
-		local rateScore = normalized(shotsPerSecond, baseline.firerate.min, baseline.firerate.max)
-
-		-- Lower recoil handles better, so invert the normalized score.
-		local handleScore = 1 - normalized(gunInfo.Recoil, baseline.recoil.min, baseline.recoil.max)
-
-		-- Reward bigger clips and fast reloads, but punish the combo of tiny clip + slow reload.
-		local clipScore = normalized(gunInfo.Bullets, baseline.clip.min, baseline.clip.max) * 0.55
-			+ (1 - normalized(gunInfo.ReloadTime, baseline.reload.min, baseline.reload.max)) * 0.45
-
-		if gunInfo.Bullets <= baseline.clip.min + 2 and gunInfo.ReloadTime >= baseline.reload.max - 0.2 then
-			clipScore *= 0.75
+		local gunInfo = GetGunSettings:InvokeServer(weaponInfo.Name) :: GunInfo
+		if not gunInfo then
+			warn("No gun info", weaponInfo.Name)
+			return
 		end
 
-		local zoomScore = scoreZoomFOV(gunInfo.ZoomFOV)
+		local info = weaponInfo.ItemInfo
+		local damageType = info.DamageType
 
+		-- replace info with new gun info
+		weaponInfo.ItemInfo = gunInfo
+
+		local damageScore = GunScoring.getDamageScore(gunInfo)
+		local rateScore = GunScoring.getRateScore(gunInfo)
+		local handleScore = GunScoring.getHandleScore(gunInfo)
+		local clipScore = GunScoring.getClipScore(gunInfo)
+		local zoomScore = GunScoring.getZoomScore(gunInfo)
+
+		-- score 0 -> 1, 1 being amazing
 		createBar("DMG", damageScore)
 		createBar("RATE", rateScore)
 		createBar("HANDLE", handleScore)
 		createBar("CLIP", clipScore)
 		createBar("ZOOM", zoomScore)
 
-		local damageColor = DAMAGE_TYPE_TO_COLOR[gunInfo.DamageType] or Color3.new(1, 1, 0)
-		createPill(gunInfo.DamageType, damageColor)
-	else
-		createBar("DMG", 0)
-		createBar("RATE", 0)
-		createBar("HANDLE", 0)
-		createBar("CLIP", 0)
-		createBar("ZOOM", 0)
+		local damageColor = DAMAGE_TYPE_TO_COLOR[damageType] or Color3.new(1, 1, 0)
+		createPill(damageType, damageColor)
+	elseif weaponInfo.Category == "Melee" then
+		local meleeInfo = GetMeleeSettings:InvokeServer(weaponInfo.Name) :: MeleeInfo
+		if not meleeInfo then
+			warn("No melee info", weaponInfo.Name)
+			return
+		end
+
+		warn(meleeInfo)
+		weaponInfo.ItemInfo = meleeInfo
+
+		local damageScore = MeleeScoring.getDamageScore(meleeInfo)
+		local speedScore = MeleeScoring.getSpeedScore(meleeInfo)
+		local knockbackScore = MeleeScoring.getKnockbackScore(meleeInfo)
+		local reliabilityScore = MeleeScoring.getReliabilityScore(meleeInfo)
+
+		createBar("DMG", damageScore)
+		createBar("SPEED", speedScore)
+		createBar("KNOCK", knockbackScore)
+		createBar("RELIAB", reliabilityScore)
 	end
 
 	for _, pill: Pill in ipairs(weaponInfo.Pills) do
@@ -508,35 +693,36 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 end
 
 function ShopUI:SelectWeapon(weaponName: string)
+	if self.purchaseInProgress then
+		warn("Can't select weapon while purchase is in progress")
+		self:PlaySound("Error")
+		return
+	end
+
 	local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
 	if not weaponInfo then
 		warn("No weapon info", weaponName)
 		return
 	end
 
+	self.currentWeaponName = weaponName
+
 	self.LoreBox.TextLabel.Text = weaponInfo.Lore
 	self.WeaponInfo.WeaponTitle.Text = weaponInfo.Name
 	self.WeaponStats.SpecialText.Text = weaponInfo.SpecialText
-	self.PurchaseArea.Visible = true
-	self.PurchaseButton.Text = "※ " .. weaponInfo.Price
-
-	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
-	if result["isUnlocked"] then
-		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
-	else
-		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
-	end
+	self:ApplySelectedWeaponState(weaponInfo)
 
 	self:SetupWeaponPreview(weaponName)
 	self:LoadStats(weaponInfo)
 end
 
 function ShopUI:SelectFilter(filterType: "Weight", filter)
-	if self.currentFiler == filter then
+	if self.currentFilterName == filter then
 		return
 	end
 
-	self.currentFiler = filter
+	self.currentFilter = filter
+	self.currentFilterName = filter
 
 	if filterType == "Weight" then
 		local info = _queryAllWeapons({
@@ -549,8 +735,46 @@ function ShopUI:SelectFilter(filterType: "Weight", filter)
 	end
 end
 
+function ShopUI:SelectFilterByIndex(selectionIndex: number)
+	local filterInfo = self.filterInfos[selectionIndex]
+	if not filterInfo then
+		return
+	end
+
+	if self.currentFilterIndex == selectionIndex then
+		return
+	end
+
+	self.currentFilterIndex = selectionIndex
+	self:SelectFilter(filterInfo.FilterType, filterInfo.Name)
+
+	for index, filterFrame in ipairs(self.filterFrames) do
+		local imageButton = filterFrame:FindFirstChild("ImageButton")
+		if imageButton and imageButton:IsA("ImageButton") then
+			imageButton.ImageColor3 = if index == selectionIndex
+				then Color3.new(0.533333, 0.533333, 0.533333)
+				else Color3.new(1, 1, 1)
+		end
+	end
+end
+
+function ShopUI:UpdateWeaponInfos()
+	for _, infoFrame in ipairs(self.currentWeaponInfoButtons) do
+		local title = infoFrame.Title :: TextLabel
+		local weaponName = title.Text
+		local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
+		if not weaponInfo then
+			warn("No weapon info", weaponName)
+			continue
+		end
+
+		self:ApplyWeaponFrameState(infoFrame, weaponInfo)
+	end
+end
+
 function ShopUI:LoadWeaponInfos(info: { WeaponInfo })
 	local selectionReference = self.ScrollingFrame.Reference
+	self.currentWeaponInfoButtons = {}
 
 	-- remove existing frames
 	for _, child in ipairs(self.ScrollingFrame:GetChildren()) do
@@ -559,42 +783,27 @@ function ShopUI:LoadWeaponInfos(info: { WeaponInfo })
 		end
 	end
 
-	for name, info: WeaponInfo in pairs(info) do
+	for _, weaponInfo: WeaponInfo in ipairs(info) do
 		local weaponTextButton = selectionReference:Clone() :: TextButton
 		weaponTextButton.Visible = true
+		table.insert(self.currentWeaponInfoButtons, weaponTextButton)
 
 		local DisplayImage = weaponTextButton.ImageLabel :: ImageLabel
 		local Cost = weaponTextButton.Cost :: TextLabel
 		local Level = weaponTextButton.Level :: TextLabel
 		local Title = weaponTextButton.Title :: TextLabel
-		weaponTextButton.Name = Title.Text
+		weaponTextButton.Name = weaponInfo.Name
 
-		DisplayImage.Image = info.PreviewImage
-		Title.Text = info.Name
-		Level.Text = "LVL " .. info.Level
-		Cost.Text = "※ " .. info.Price
+		DisplayImage.Image = weaponInfo.PreviewImage
+		Title.Text = weaponInfo.Name
+		Level.Text = "LVL " .. weaponInfo.Level
+		Cost.Text = "※ " .. weaponInfo.Price
 		weaponTextButton.Parent = self.ScrollingFrame
 
-		-- TODO: why are we using strings for this
-		local result = shouldBeLocked(info.Level, info.Price)
-		local isUnlocked, reason = result["isUnlocked"], result["reason"]
-
-		if not isUnlocked then
-			if reason == "MoneyLevel" then
-				Level.TextColor3 = Color3.new(1, 0, 0)
-				Cost.TextColor3 = Color3.new(1, 0, 0)
-			elseif reason == "Money" then
-				Cost.TextColor3 = Color3.new(1, 0, 0)
-			elseif reason == "Level" then
-				Level.TextColor3 = Color3.new(1, 0, 0)
-			end
-
-			weaponTextButton.ImageLabel.ImageTransparency = 0.5
-			weaponTextButton.Title.BackgroundColor3 = Color3.new(1, 0, 0)
-		end
+		self:ApplyWeaponFrameState(weaponTextButton, weaponInfo)
 
 		weaponTextButton.MouseButton1Down:Connect(function()
-			self:SelectWeapon(info.Name)
+			self:SelectWeapon(weaponInfo.Name)
 		end)
 
 		self:HookBaseButtonSounds(weaponTextButton, 0.04)
@@ -603,30 +812,38 @@ end
 
 function ShopUI:LoadFilters()
 	local filterReference = self.Filters.FilterReference
-	warn("Filter info:", self.shopInfo.Filters)
+	local sortedFilters = {}
 	for _, filter: FilterInfo in ipairs(self.shopInfo.Filters) do
+		table.insert(sortedFilters, filter)
+	end
+
+	table.sort(sortedFilters, function(left, right)
+		return left.Order < right.Order
+	end)
+
+	self.filterFrames = {}
+	self.filterInfos = sortedFilters
+
+	for index, filter: FilterInfo in ipairs(sortedFilters) do
 		local filterFrame = filterReference:Clone()
-		local imageButton = filterFrame:WaitForChild("ImageButton") :: ImageButton
-		imageButton.Image = filter.Image
+		local selectionButton = filterFrame:WaitForChild("ImageButton") :: ImageButton
+		selectionButton.Image = filter.Image
+		filterFrame:SetAttribute("SelectionNumber", index)
+		filterFrame:SetAttribute("FilterName", filter.Name)
 
 		filterFrame.Name = filter.Name
-		filterFrame.LayoutOrder = filter.Order
+		filterFrame.LayoutOrder = index
 		filterFrame.Visible = true
 		filterFrame.Parent = self.Filters
+		table.insert(self.filterFrames, filterFrame)
 
-		imageButton.MouseButton1Down:Connect(function()
-			for _, button in ipairs(filterFrame.Parent:GetChildren()) do
-				if button:IsA("Frame") then
-					local imageButton = button:FindFirstChild("ImageButton")
-					if imageButton then
-						imageButton.ImageColor3 = Color3.new(1, 1, 1)
-					end
-				end
-			end
-
-			self:SelectFilter(filter.FilterType, filter.Name)
-			imageButton.ImageColor3 = Color3.new(0.533333, 0.533333, 0.533333)
+		selectionButton.MouseButton1Down:Connect(function()
+			self:SelectFilterByIndex(index)
 		end)
+	end
+
+	if #sortedFilters > 0 then
+		self:SelectFilterByIndex(1)
 	end
 end
 
@@ -688,9 +905,89 @@ function ShopUI:LoadSounds()
 	end
 end
 
+function ShopUI:PurchaseCurrentItem()
+	if not self.alive then
+		return
+	end
+
+	local selectedWeaponName = self.currentWeaponName or self.WeaponInfo.WeaponTitle.Text
+	local weaponInfo = _getWeaponInfo(selectedWeaponName)
+	if not weaponInfo then
+		warn("No weapon info for", selectedWeaponName)
+		return
+	end
+
+	local isOwned = self:OwnsWeapon(selectedWeaponName)
+	if isOwned then
+		warn("Purchase failed:", "Already owned")
+		self:PlaySound("Error")
+		return
+	end
+
+	-- We can initially validate it ourselves
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if not result["isUnlocked"] then
+		warn("Purchase failed:", "Not unlocked")
+		self:PlaySound("Error")
+		return
+	end
+
+	if self.purchaseInProgress then
+		warn("Purchase failed:", "Already purchasing")
+		self:PlaySound("Error")
+		return
+	end
+
+	self.purchaseLoadingToken += 1
+	local purchaseLoadingToken = self.purchaseLoadingToken
+
+	local function endPurchase()
+		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
+		self.purchaseInProgress = false
+		self.purchaseLoadingToken += 1
+		self:ExitLoadingState()
+	end
+
+	self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
+	self.purchaseInProgress = true
+
+	task.delay(PURCHASE_LOADING_DELAY, function()
+		if not self.purchaseInProgress then
+			return
+		end
+
+		if self.purchaseLoadingToken ~= purchaseLoadingToken then
+			return
+		end
+
+		self:StartLoadingState()
+	end)
+
+	-- Our own validation passed, let's see if the server agrees
+	local success, message = Remotes.RequestPurchase:InvokeServer(selectedWeaponName)
+	if not success then
+		warn("Purchase failed:", message)
+		self:PlaySound("Error")
+		endPurchase()
+		return
+	end
+
+	self:PlaySound("Purchase")
+	endPurchase()
+end
+
 function ShopUI:InitButtons()
-	self.Exit.MouseButton1Down:Connect(function()
-		self:Hide(true)
+	local function moveFilter(offset: number)
+		local nextIndex = math.clamp(self.currentFilterIndex + offset, 1, #self.filterInfos)
+		self:SelectFilterByIndex(nextIndex)
+	end
+
+	self.LeftFilter.MouseButton1Down:Connect(function()
+		moveFilter(-1)
+	end)
+
+	self.RightFilter.MouseButton1Down:Connect(function()
+		moveFilter(1)
 	end)
 
 	for _, desc in ipairs(self.MainFrame:GetDescendants()) do
@@ -698,18 +995,62 @@ function ShopUI:InitButtons()
 			self:HookBaseButtonSounds(desc)
 		end
 	end
+
+	self.PurchaseButton.MouseButton1Down:Connect(function()
+		self:PurchaseCurrentItem()
+	end)
+end
+
+function ShopUI:InitLoadingScreen()
+	local rotationTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.4, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+		{ Rotation = 360 }
+	)
+	rotationTween:Play()
 end
 
 function ShopUI:Init()
-	self.MainFrame.CurrencyOwned.Text = "※ " .. tostring(getCurrentMoney())
+	self:UpdateCurrencyDisplay(getCurrentMoney())
+	self.MainFrame.Level.Text = "LVL " .. tostring(getCurrentLevel())
 	self:LoadFilters()
 	self:LoadSounds()
 	self:InitButtons()
+	self:InitLoadingScreen()
 	self:SetupRenderConnect()
+	self:ListenForPurchase()
+	self:UpdateOwnedWeapons()
 	self:Show(true)
 
 	_getAllWeaponInfosForCategory(self.shopInfo.Category)
-	self:SelectFilter(self.shopInfo.Filters[1].FilterType, self.shopInfo.Filters[1].Name)
+	self:SelectFilterByIndex(1)
+end
+
+function ShopUI:ListenForPurchase()
+	if self.purchaseConnection then
+		self.purchaseConnection:Disconnect()
+	end
+
+	if self.currencyConnection then
+		self.currencyConnection:Disconnect()
+	end
+
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local credits = leaderstats:WaitForChild("Credits") :: NumberValue
+	-- self.currencyConnection = credits:GetPropertyChangedSignal("Value"):Connect(function()
+	-- 	self:UpdateCurrencyDisplay(credits.Value)
+	-- end)
+
+	self.purchaseConnection = Remotes.ItemPurchased.OnClientEvent:Connect(function(weaponName)
+		self:UpdateOwnedWeapons()
+		self:UpdateWeaponInfos()
+
+		if self.currentWeaponName == weaponName then
+			self:SelectWeapon(weaponName)
+		end
+
+		self:UpdateCurrencyDisplay(credits.Value)
+	end)
 end
 
 function ShopUI:SetupRenderConnect()
@@ -739,15 +1080,138 @@ function ShopUI:SetupRenderConnect()
 	end)
 end
 
+function ShopUI:DisableEnabledCoreGuis()
+	self.enabledCoreGuis = getEnabledCoreGuis()
+
+	for _, coreGuiType in ipairs(self.enabledCoreGuis) do
+		if coreGuiType == Enum.CoreGuiType.ExperienceShop then
+			continue
+		end
+
+		pcall(function()
+			StarterGui:SetCoreGuiEnabled(coreGuiType, false)
+		end)
+	end
+end
+
+function ShopUI:RestoreCoreGuis()
+	if not self.enabledCoreGuis then
+		return
+	end
+
+	for _, coreGuiType in ipairs(self.enabledCoreGuis) do
+		if coreGuiType == Enum.CoreGuiType.ExperienceShop then
+			continue
+		end
+		pcall(function()
+			StarterGui:SetCoreGuiEnabled(coreGuiType, true)
+		end)
+	end
+
+	self.enabledCoreGuis = nil
+end
+
+function ShopUI:UnlockCharacter()
+	if self.characterDiedConnection then
+		self.characterDiedConnection:Disconnect()
+		self.characterDiedConnection = nil
+	end
+
+	if self.characterAddedConnection then
+		self.characterAddedConnection:Disconnect()
+		self.characterAddedConnection = nil
+	end
+
+	if self.lockedRootPart and self.lockedRootPart.Parent and self.originalRootAnchored ~= nil then
+		self.lockedRootPart.Anchored = self.originalRootAnchored
+	end
+
+	if self.lockedHumanoid and self.lockedHumanoid.Parent then
+		if self.originalWalkSpeed ~= nil then
+			self.lockedHumanoid.WalkSpeed = self.originalWalkSpeed
+		end
+
+		if self.originalJumpPower ~= nil then
+			self.lockedHumanoid.JumpPower = self.originalJumpPower
+		end
+
+		if self.originalJumpHeight ~= nil then
+			self.lockedHumanoid.JumpHeight = self.originalJumpHeight
+		end
+
+		if self.originalAutoRotate ~= nil then
+			self.lockedHumanoid.AutoRotate = self.originalAutoRotate
+		end
+	end
+
+	self.lockedCharacter = nil
+	self.lockedHumanoid = nil
+	self.lockedRootPart = nil
+	self.originalWalkSpeed = nil
+	self.originalJumpPower = nil
+	self.originalJumpHeight = nil
+	self.originalAutoRotate = nil
+	self.originalRootAnchored = nil
+end
+
+function ShopUI:LockCharacter()
+	self:UnlockCharacter()
+
+	local character = Player.Character
+	if not character then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+	if not humanoid or not rootPart then
+		return
+	end
+
+	self.lockedCharacter = character
+	self.lockedHumanoid = humanoid
+	self.lockedRootPart = rootPart
+	self.originalWalkSpeed = humanoid.WalkSpeed
+	self.originalJumpPower = humanoid.JumpPower
+	self.originalJumpHeight = humanoid.JumpHeight
+	self.originalAutoRotate = humanoid.AutoRotate
+	self.originalRootAnchored = rootPart.Anchored
+
+	rootPart.Anchored = true
+	humanoid.WalkSpeed = 0
+	humanoid.JumpPower = 0
+	humanoid.JumpHeight = 0
+	humanoid.AutoRotate = false
+
+	self.characterDiedConnection = humanoid.Died:Connect(function()
+		if self.alive then
+			self:Hide(true)
+		end
+	end)
+
+	self.characterAddedConnection = Player.CharacterAdded:Connect(function(newCharacter)
+		if not self.alive then
+			return
+		end
+
+		if newCharacter ~= self.lockedCharacter then
+			self:Hide(true)
+		end
+	end)
+end
+
 function ShopUI:Show(entering: boolean)
 	self.alive = true
 
 	if entering then
+		self:DisableEnabledCoreGuis()
 		lockCamera()
 		self.baseCameraCFrame = self.CameraPart.CFrame
 		tweenCameraCFrame(self.CameraPart.CFrame)
 		self.ShopMusic:Play()
 		Player:SetAttribute("InShop", true)
+		self:LockCharacter()
 	end
 
 	self:TweenBlur(24)
@@ -755,11 +1219,20 @@ function ShopUI:Show(entering: boolean)
 
 	local main = self.MainFrame :: Frame
 	main:TweenPosition(UDim2.new(0.5, 0, 0.5, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 1.5, true)
+	self:UpdateOwnedWeapons()
+	self:UpdateWeaponInfos()
 end
 
-function ShopUI:Hide(exitting: boolean)
+function ShopUI:Hide(exitting: boolean, destroyAfterFade: boolean?)
+	if not self.alive and not exitting then
+		return
+	end
+
 	self.alive = false
 	local main = self.MainFrame :: Frame
+
+	self:UnlockCharacter()
+	self:RestoreCoreGuis()
 
 	if exitting then
 		returnCamera()
@@ -773,7 +1246,7 @@ function ShopUI:Hide(exitting: boolean)
 	self:TweenTintColor(Color3.new(1, 1, 1))
 
 	main:TweenPosition(UDim2.new(0.5, 0, 2, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 1, true, function()
-		if exitting then
+		if exitting and (destroyAfterFade == nil or destroyAfterFade) then
 			task.delay(3, function()
 				self:Destroy()
 			end)
@@ -812,6 +1285,30 @@ function ShopUI:Destroy()
 		self.connection:Disconnect()
 		self.connection = nil
 	end
+
+	if self.purchaseConnection then
+		self.purchaseConnection:Disconnect()
+		self.purchaseConnection = nil
+	end
+
+	if self.currencyConnection then
+		self.currencyConnection:Disconnect()
+		self.currencyConnection = nil
+	end
+
+	if self.characterAddedConnection then
+		self.characterAddedConnection:Disconnect()
+		self.characterAddedConnection = nil
+	end
+
+	if self.characterDiedConnection then
+		self.characterDiedConnection:Disconnect()
+		self.characterDiedConnection = nil
+	end
+
+	self.currencyAnimationToken += 1
+	self:RestoreCoreGuis()
+	self:UnlockCharacter()
 
 	self.blurEffect:Destroy()
 	self.colorCorrection:Destroy()

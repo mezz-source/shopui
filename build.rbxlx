@@ -1,0 +1,5867 @@
+<roblox version="4">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <Color3 name="Ambient">
+        <R>0</R>
+        <G>0</G>
+        <B>0</B>
+      </Color3>
+      <float name="Brightness">2</float>
+      <bool name="GlobalShadows">true</bool>
+      <bool name="Outlines">false</bool>
+      <token name="Technology">1</token>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="1">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="2">
+      <Properties>
+        <string name="Name">ShopClient</string>
+      </Properties>
+      <Item class="Folder" referent="3">
+        <Properties>
+          <string name="Name">ShopInfos</string>
+        </Properties>
+        <Item class="ModuleScript" referent="4">
+          <Properties>
+            <string name="Name">TestShop</string>
+            <string name="Source"><![CDATA[return {
+	ShopName = "Test Shop",
+	Category = "Gun",
+	Filters = {
+		{ FilterType = "Weight", Name = "Light", Order = 0, Image = "rbxassetid://123783343505431" },
+		{ FilterType = "Weight", Name = "Moderate", Order = 1, Image = "rbxassetid://135952675018132" },
+		{ FilterType = "Weight", Name = "Heavy", Order = 2, Image = "rbxassetid://134498040939435" },
+	},
+}
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">ShopTypes</string>
+          <string name="Source"><![CDATA[local ShopTypes = {}
+
+export type Category = "Gun" | "Melee" | "Armor"
+export type Weight = "Light" | "Moderate" | "Heavy"
+
+export type Pill = {
+	Text: string,
+	Color: Color3,
+}
+
+export type FilterInfo = {
+	FilterType: string,
+	Name: string,
+	Order: number,
+	Image: string?,
+}
+
+export type ShopInfo = {
+	ShopName: string,
+	Category: Category,
+	Filters: { FilterInfo },
+}
+
+export type ArmorInfo = {
+	BulletResistance: number,
+	SharpResistance: number,
+	BluntResistance: number,
+	ArmorType: string,
+}
+
+export type MeleeInfo = {
+	Damage: number,
+	SwingDebounce: number,
+	DamageType: string,
+}
+
+export type GunInfo = {
+	FireType: "Auto" | "Semi" | "Burst",
+	Damage: number,
+	Firerate: number,
+	Bullets: number,
+	ZoomFOV: number,
+	BulletSpeed: number,
+	Spread: number,
+	Range: number,
+	ReloadTime: number,
+	Recoil: number,
+	HeadshotMultiplier: number,
+	DamageType: string,
+}
+
+export type ItemInfo = ArmorInfo | MeleeInfo | GunInfo
+
+export type WeaponInfo = {
+	Name: string,
+	Category: Category,
+	Weight: Weight,
+	Price: number,
+	Level: number,
+	Lore: string,
+	SpecialText: string,
+	GroupUnlocked: boolean,
+	Consumable: boolean,
+	MaxStack: number?,
+	PreviewImage: string,
+	ItemInfo: ItemInfo,
+	Pills: { Pill },
+}
+
+export type ShopQuery = {
+	category: Category?,
+	weights: Weight | { Weight }?,
+	nameContains: string?,
+	search: string?,
+	priceMin: number?,
+	priceMax: number?,
+	levelMin: number?,
+	levelMax: number?,
+	consumable: boolean?,
+	groupUnlocked: boolean?,
+	customFilters: { [string]: any }?,
+	sortBy: string?,
+	sortDir: "asc" | "desc"?,
+	offset: number?,
+	limit: number?,
+	fields: { string }?,
+	returnType: "map" | "array"?,
+	name: string?,
+}
+
+return ShopTypes
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="6">
+        <Properties>
+          <string name="Name">UI</string>
+        </Properties>
+        <Item class="ModuleScript" referent="7">
+          <Properties>
+            <string name="Name">Shop</string>
+            <string name="Source"><![CDATA[local ShopUI = {}
+ShopUI.__index = ShopUI
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GUIs = ReplicatedStorage:WaitForChild("GUIs")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
+local RemoteInfo = Remotes:WaitForChild("GetWeaponInfo")
+local RemoteInfoAll = Remotes:WaitForChild("GetAllInfoForCategory")
+
+local WeaponPreviews = ReplicatedStorage:WaitForChild("WeaponPreview")
+
+local ShopInfos = ReplicatedStorage.ShopClient.ShopInfos
+local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
+
+local Shops = workspace:WaitForChild("Shops")
+
+type Category = ShopTypes.Category
+type Weight = ShopTypes.Weight
+type Pill = ShopTypes.Pill
+type FilterInfo = ShopTypes.FilterInfo
+type ShopInfo = ShopTypes.ShopInfo
+type ArmorInfo = ShopTypes.ArmorInfo
+type MeleeInfo = ShopTypes.MeleeInfo
+type GunInfo = ShopTypes.GunInfo
+type WeaponInfo = ShopTypes.WeaponInfo
+
+local DAMAGE_TYPE_TO_COLOR = {
+	Bullet = Color3.new(0.8, 0.8, 0.8),
+	Special = Color3.new(1, 1, 0),
+	Sharp = Color3.new(1, 0, 0),
+	Blunt = Color3.new(1, 0.4, 0),
+}
+
+local SOUND_MAP = {
+	Select = { SoundId = "rbxassetid://124033101073224" },
+	Hover = { SoundId = "rbxassetid://139295675611093" },
+	EndHover = { SoundId = "rbxassetid://139295675611093", PlaybackSpeed = 0.8, Volume = 0.3 },
+	Purchase = { SoundId = "rbxassetid://134535509531927" },
+	Error = { SoundId = "rbxassetid://8466981206" },
+}
+
+local CAMERA_MOUSE_INFLUENCE = 0.24
+local CAMERA_LERP_ALPHA = 0.01
+local PURCHASE_LOADING_DELAY = 1.5
+local CURRENCY_ANIMATION_DURATION = 0.45
+
+local function clamp01(value: number): number
+	if value < 0 then
+		return 0
+	end
+	if value > 1 then
+		return 1
+	end
+	return value
+end
+
+local function normalized(value: number, minValue: number, maxValue: number): number
+	if maxValue <= minValue then
+		return 0
+	end
+	return clamp01((value - minValue) / (maxValue - minValue))
+end
+
+local function firerateToShotsPerSecond(firerate: number): number
+	if firerate <= 0 then
+		return 0
+	end
+
+	-- Support common formats:
+	-- 1) rounds-per-minute values (usually >= 20)
+	-- 2) seconds-per-shot values (usually < 1)
+	-- 3) already shots-per-second values (everything else)
+	if firerate >= 20 then
+		return firerate / 60
+	end
+
+	if firerate < 1 then
+		return 1 / firerate
+	end
+
+	return firerate
+end
+
+local function scoreZoomFOV(zoomFOV: number): number
+	-- 20-40 is the strong/"decent" range, but sub-20 should still visibly register.
+	if zoomFOV <= 20 then
+		return normalized(zoomFOV, 0, 20) * 0.45
+	end
+
+	if zoomFOV <= 40 then
+		return 0.45 + normalized(zoomFOV, 20, 40) * 0.45
+	end
+
+	return 0.9 + normalized(zoomFOV, 40, 55) * 0.1
+end
+
+local GUN_BASELINES = {
+	Auto = {
+		damage = { min = 10, max = 42 },
+		firerate = { min = 3.5, max = 14 },
+		dps = { min = 55, max = 300 },
+		recoil = { min = 8, max = 48 },
+		clip = { min = 18, max = 60 },
+		reload = { min = 1.7, max = 3.8 },
+	},
+	Semi = {
+		damage = { min = 18, max = 75 },
+		firerate = { min = 1.6, max = 8 },
+		dps = { min = 45, max = 260 },
+		recoil = { min = 10, max = 55 },
+		clip = { min = 6, max = 26 },
+		reload = { min = 1.5, max = 3.4 },
+	},
+	Burst = {
+		damage = { min = 14, max = 52 },
+		firerate = { min = 2.4, max = 10.5 },
+		dps = { min = 70, max = 320 },
+		recoil = { min = 9, max = 52 },
+		clip = { min = 12, max = 36 },
+		reload = { min = 1.6, max = 3.6 },
+	},
+}
+
+local function _getShopInfo(shopName: string): ShopInfo
+	local info = ShopInfos:FindFirstChild(shopName)
+	assert(info, "Missing shop info " .. shopName)
+	return require(info)
+end
+
+local function _getWeaponInfo(weaponName: string): WeaponInfo?
+	return RemoteInfo:InvokeServer(weaponName)
+end
+
+local function _getAllWeaponInfosForCategory(category: Category): { WeaponInfo }
+	local infos = RemoteInfoAll:InvokeServer({ category = category })
+	if not infos then
+		warn("No info provided")
+	end
+	return infos or {}
+end
+
+local function _queryAllWeapons(queryTable): { WeaponInfo }
+	local infos = RemoteInfoAll:InvokeServer(queryTable)
+	if not infos then
+		warn("No info provided")
+	end
+	return infos or {}
+end
+
+local function lockCamera()
+	Camera.CameraType = Enum.CameraType.Scriptable
+end
+
+local function returnCamera()
+	Camera.CameraType = Enum.CameraType.Custom
+end
+
+local function tweenCameraCFrame(newCFrame: CFrame)
+	local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+	local tween = TweenService:Create(Camera, tweenInfo, { CFrame = newCFrame })
+	tween:Play()
+end
+
+local function getCurrentMoney()
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local Money = leaderstats:WaitForChild("Credits")
+	return Money.Value
+end
+
+local function getCurrentLevel()
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local Level = leaderstats:WaitForChild("Level")
+	return Level.Value
+end
+
+local function shouldBeLocked(requiredLevel: number, requiredMoney: number): { isUnlocked: boolean, reason: string }
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local Money = leaderstats:WaitForChild("Credits")
+	local Level = leaderstats:WaitForChild("Level")
+
+	local Reason = ""
+	local Unlocked = true
+
+	if Money.Value < requiredMoney then
+		Reason = Reason .. "Money"
+		Unlocked = false
+	end
+
+	if Level.Value < requiredLevel then
+		Reason = Reason .. "Level"
+		Unlocked = false
+	end
+
+	return { isUnlocked = Unlocked, reason = Reason }
+end
+
+function ShopUI.new(shopModelName: string)
+	local Shop = Shops:FindFirstChild(shopModelName)
+	if not Shop then
+		warn(`No shop named {shopModelName} was found, could not create shop`)
+		return
+	end
+
+	assert(Shop:FindFirstChild("ShopMusic"), "No shop music")
+	assert(Shop:FindFirstChild("Shop"), "No shop model")
+	assert(Shop:FindFirstChild("CameraPart"), "No camera part")
+
+	local self = setmetatable({}, ShopUI)
+	local shopGui = GUIs.Shop:Clone()
+	shopGui.Parent = Player.PlayerGui
+	self.shopInfo = _getShopInfo(shopModelName)
+	self.gui = shopGui
+	self.sounds = {}
+
+	self.CameraPart = Shop.CameraPart
+	self.ShopMusic = Shop.ShopMusic
+	self.ShopMusic.Volume = 0.3
+
+	self.ShopModel = Shop.Shop
+	self.ShopName = shopModelName
+
+	local UIFrame = self.gui.Main.UI
+	local LoadingFrame = self.gui.Main.Loading
+	local LoadingIcon = LoadingFrame.LoadingIcon
+
+	local MenuOptions = UIFrame.MenuOptions.Options
+
+	local WeaponInfo = UIFrame.WeaponInfo :: Frame
+	local LoreBox = WeaponInfo.LoreBox :: Frame
+	local PurchaseArea = WeaponInfo.PurchaseArea :: Frame
+	local PurchaseButton = PurchaseArea.TextButton :: TextButton
+
+	local WeaponPreview = UIFrame.WeaponPreview :: Frame
+	local ViewportFrame = WeaponPreview.ViewportFrame :: ViewportFrame
+
+	local WeaponSelection = UIFrame.WeaponSelection :: Frame
+	local ScrollingFrame = WeaponSelection.ScrollingFrame :: ScrollingFrame
+	local Filters = WeaponSelection.Filters :: Frame
+
+	local WeaponStats = UIFrame.WeaponStats.Stats :: Frame
+	local Bars = WeaponStats.Bars :: Frame
+	local Pills = WeaponStats.Pills :: Frame
+	local ExitButton = UIFrame.Exit :: TextButton
+	local _CurrencyOwnedText = UIFrame.CurrencyOwned :: TextLabel
+	local _Level = UIFrame.Level :: TextLabel
+
+	self.LoadingFrame = LoadingFrame
+	self.LoadingIcon = LoadingIcon
+
+	self.MainFrame = UIFrame
+	self.MenuOptions = MenuOptions
+	self.WeaponInfo = WeaponInfo
+	self.WeaponPreview = WeaponPreview
+	self.WeaponSelection = WeaponSelection
+	self.WeaponStats = WeaponStats
+
+	self.LoreBox = LoreBox
+	self.PurchaseArea = PurchaseArea
+	self.PurchaseButton = PurchaseButton
+
+	self.ViewportFrame = ViewportFrame
+
+	self.ScrollingFrame = ScrollingFrame
+	self.Filters = Filters
+
+	self.Bars = Bars
+	self.Pills = Pills
+	self.Exit = ExitButton
+
+	self.alive = false
+	self.currentFilter = ""
+
+	local previewCamera = Instance.new("Camera")
+	previewCamera.CFrame = CFrame.new(Vector3.zero)
+	self.ViewportFrame.CurrentCamera = previewCamera
+
+	self.PreviewCamera = previewCamera
+	self.previewConnection = nil
+	self.previewModel = nil
+	self.previewWorldModel = nil
+	self.previewAngle = 0
+	self.previewBasePivot = nil
+
+	local colorCorrection = Instance.new("ColorCorrectionEffect", Camera)
+	local blurEffect = Instance.new("BlurEffect", Camera)
+	blurEffect.Size = 0
+	colorCorrection.TintColor = Color3.new(1, 1, 1)
+
+	self.blurEffect = blurEffect
+	self.colorCorrection = colorCorrection
+
+	self.MainFrame.Position = UDim2.new(0.5, 0, 2, 0)
+	self.baseCameraCFrame = self.CameraPart.CFrame
+	self.connection = nil
+	self.purchaseConnection = nil
+	self.currencyConnection = nil
+	self.purchaseInProgress = false
+	self.purchaseLoadingToken = 0
+	self.currencyAnimationToken = 0
+	self.currentCurrencyAmount = nil
+	self.ownedItems = {}
+	self.currentWeaponInfoButtons = {}
+	self.currentWeaponName = nil
+
+	self:Init()
+
+	return self
+end
+
+function ShopUI:UpdateOwnedWeapons()
+	local ownedItems = Remotes.GetOwnedItems:InvokeServer() :: { string }
+	if not ownedItems then
+		warn("No owned items provided")
+		return
+	end
+
+	self.ownedItems = ownedItems
+end
+
+function ShopUI:UpdateCurrencyDisplay(targetAmount: number)
+	local currencyText = self.MainFrame.CurrencyOwned :: TextLabel
+	local currentAmount = self.currentCurrencyAmount
+
+	if currentAmount == nil then
+		self.currentCurrencyAmount = targetAmount
+		currencyText.Text = "※ " .. tostring(targetAmount)
+		return
+	end
+
+	self.currencyAnimationToken += 1
+	local currencyAnimationToken = self.currencyAnimationToken
+	local startAmount = currentAmount
+
+	if targetAmount >= startAmount then
+		self.currentCurrencyAmount = targetAmount
+		currencyText.Text = "※ " .. tostring(targetAmount)
+		return
+	end
+
+	task.spawn(function()
+		local startTime = os.clock()
+		local duration = CURRENCY_ANIMATION_DURATION
+
+		while self.alive and self.currencyAnimationToken == currencyAnimationToken do
+			local progress = math.clamp((os.clock() - startTime) / duration, 0, 1)
+			local easedProgress = 1 - (1 - progress) ^ 3
+			local displayedAmount = math.floor(startAmount + (targetAmount - startAmount) * easedProgress + 0.5)
+
+			self.currentCurrencyAmount = displayedAmount
+			currencyText.Text = "※ " .. tostring(displayedAmount)
+
+			if progress >= 1 then
+				break
+			end
+
+			task.wait()
+		end
+
+		if self.currencyAnimationToken == currencyAnimationToken then
+			self.currentCurrencyAmount = targetAmount
+			currencyText.Text = "※ " .. tostring(targetAmount)
+		end
+	end)
+end
+
+function ShopUI:OwnsWeapon(weaponName: string): boolean
+	return table.find(self.ownedItems, weaponName) ~= nil
+end
+
+function ShopUI:ResetWeaponFrameState(weaponFrame)
+	local title = weaponFrame.Title :: TextLabel
+	local cost = weaponFrame.Cost :: TextLabel
+	local level = weaponFrame.Level :: TextLabel
+	local image = weaponFrame.ImageLabel :: ImageLabel
+
+	title.BackgroundColor3 = Color3.new(1, 1, 1)
+	title.TextColor3 = Color3.new(1, 1, 1)
+	cost.TextColor3 = Color3.new(1, 1, 1)
+	level.TextColor3 = Color3.new(1, 1, 1)
+	image.ImageColor3 = Color3.new(1, 1, 1)
+	image.ImageTransparency = 0
+end
+
+function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
+	self:ResetWeaponFrameState(weaponFrame)
+
+	local title = weaponFrame.Title :: TextLabel
+	local cost = weaponFrame.Cost :: TextLabel
+	local level = weaponFrame.Level :: TextLabel
+	local image = weaponFrame.ImageLabel :: ImageLabel
+
+	if self:OwnsWeapon(weaponInfo.Name) then
+		title.BackgroundColor3 = Color3.new(0.062745, 0.2, 0.062745)
+		title.TextColor3 = Color3.new(0, 1, 0)
+		cost.TextColor3 = Color3.new(0, 1, 0)
+		level.TextColor3 = Color3.new(0, 1, 0)
+		image.ImageColor3 = Color3.new(0, 1, 0)
+		image.ImageTransparency = 0.5
+		return
+	else
+		title.TextColor3 = Color3.new(0, 0, 0)
+	end
+
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if result.isUnlocked then
+		return
+	end
+
+	local reason = result.reason
+	if reason == "MoneyLevel" then
+		level.TextColor3 = Color3.new(1, 0, 0)
+		cost.TextColor3 = Color3.new(1, 0, 0)
+	elseif reason == "Money" then
+		cost.TextColor3 = Color3.new(1, 0, 0)
+	elseif reason == "Level" then
+		level.TextColor3 = Color3.new(1, 0, 0)
+	end
+
+	image.ImageTransparency = 0.5
+	title.BackgroundColor3 = Color3.new(1, 0, 0)
+end
+
+function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
+	self.PurchaseArea.Visible = true
+	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
+	self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+
+	if self:OwnsWeapon(weaponInfo.Name) then
+		self.PurchaseButton.Text = "OWNED"
+		self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
+		return
+	end
+
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if result.isUnlocked then
+		return
+	end
+
+	self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
+	if result.reason == "MoneyLevel" then
+		self.PurchaseButton.Text = "※ " .. weaponInfo.Price .. " | LVL " .. weaponInfo.Level
+	elseif result.reason == "Money" then
+		self.PurchaseButton.Text = "※ " .. weaponInfo.Price
+	elseif result.reason == "Level" then
+		self.PurchaseButton.Text = "LVL " .. weaponInfo.Level
+	end
+end
+
+function ShopUI:ExitLoadingState()
+	local backgroundTween = TweenService:Create(
+		self.LoadingFrame,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 1 }
+	)
+
+	local iconTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ ImageTransparency = 1 }
+	)
+
+	iconTween:Play()
+	backgroundTween:Play()
+end
+
+function ShopUI:StartLoadingState()
+	self.LoadingIcon.Position = UDim2.new(0.5, 0, 0.6, 0)
+	self.LoadingIcon:TweenPosition(
+		UDim2.new(0.5, 0, 0.5, 0),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quint,
+		0.4,
+		true
+	)
+
+	local backgroundTween = TweenService:Create(
+		self.LoadingFrame,
+		TweenInfo.new(0.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ BackgroundTransparency = 0.5 }
+	)
+
+	local iconTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+		{ ImageTransparency = 0 }
+	)
+
+	iconTween:Play()
+	backgroundTween:Play()
+end
+
+function ShopUI:ClearWeaponPreview()
+	if self.previewConnection then
+		self.previewConnection:Disconnect()
+		self.previewConnection = nil
+	end
+
+	if self.previewModel then
+		self.previewModel:Destroy()
+		self.previewModel = nil
+	end
+
+	if self.previewWorldModel then
+		self.previewWorldModel:Destroy()
+		self.previewWorldModel = nil
+	end
+
+	self.previewBasePivot = nil
+	self.previewAngle = 0
+	self.ViewportFrame:ClearAllChildren()
+	self.ViewportFrame.CurrentCamera = self.PreviewCamera
+end
+
+function ShopUI:SetupWeaponPreview(weaponName: string)
+	self:ClearWeaponPreview()
+
+	local model = WeaponPreviews:FindFirstChild(weaponName)
+	if not model then
+		warn("No preview model", weaponName)
+		return
+	end
+	if not model:IsA("Model") then
+		warn("Not a model", weaponName)
+		return
+	end
+	if not model.PrimaryPart then
+		warn("No primary part for model", weaponName)
+		return
+	end
+
+	local previewClone = model:Clone()
+	previewClone:PivotTo(CFrame.new())
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Parent = self.ViewportFrame
+	previewClone.Parent = worldModel
+
+	self.previewModel = previewClone
+	self.previewWorldModel = worldModel
+	self.previewBasePivot = previewClone:GetPivot()
+
+	local _, boundsSize = previewClone:GetBoundingBox()
+	local cameraDistance = math.max(boundsSize.X, boundsSize.Y + 0.3, boundsSize.Z) * 1.7 + 1.25
+	self.PreviewCamera.CFrame =
+		CFrame.new(Vector3.new(0, boundsSize.Y * 0.1, cameraDistance), Vector3.new(0, boundsSize.Y * 0.1, 0))
+
+	self.previewConnection = RunService.RenderStepped:Connect(function(deltaTime)
+		if not self.alive or not self.previewModel or not self.previewBasePivot then
+			return
+		end
+
+		self.previewAngle += deltaTime * 0.6
+		self.previewModel:PivotTo(self.previewBasePivot * CFrame.Angles(0, self.previewAngle, 0))
+	end)
+end
+
+function ShopUI:LoadStats(weaponInfo: WeaponInfo)
+	local weaponStats = self.WeaponStats :: Frame
+	local Bars = weaponStats.Bars :: Frame
+	local Pills = weaponStats.Pills :: Frame
+	local BarRef = Bars.BarReference :: Frame
+	local PillRef = Pills.PillReference :: Frame
+
+	for _, barFrame in ipairs(Bars:GetChildren()) do
+		if barFrame.Name ~= "BarReference" and barFrame:IsA("Frame") then
+			barFrame:Destroy()
+		end
+	end
+
+	for _, pillFrame in ipairs(Pills:GetChildren()) do
+		if pillFrame:IsA("Frame") and pillFrame.Name ~= "PillReference" then
+			pillFrame:Destroy()
+		end
+	end
+
+	local function createBar(barLabel: string, fillLevel: number)
+		local barFrame = BarRef:Clone() :: Frame
+		local bar = barFrame.Bar :: Frame
+		local fill = bar.Fill :: Frame
+		local label = bar.Label :: TextLabel
+
+		fillLevel = clamp01(fillLevel)
+		label.Text = string.upper(barLabel)
+
+		fill.Size = UDim2.new(0, 0, 1, 0)
+
+		if fillLevel < 0.3 then
+			fill.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+			label.TextColor3 = Color3.new(1, 0, 0)
+		elseif fillLevel == 1 then
+			fill.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+			label.TextColor3 = Color3.fromRGB(255, 255, 0)
+		end
+
+		barFrame.Name = barLabel
+		barFrame.Visible = true
+		barFrame.Parent = Bars
+		fill:TweenSize(UDim2.new(fillLevel, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 1, true)
+	end
+
+	local function createPill(pillText: string, color: Color3)
+		local pill = PillRef:Clone() :: Frame
+		local label = pill.Pill :: TextLabel
+		label.Text = string.upper(pillText)
+		label.BackgroundColor3 = color
+		pill.BackgroundColor3 = Color3.new(color.R * 0.8, color.G * 0.8, color.B * 0.8)
+		pill.Visible = true
+		pill.Name = pillText
+		pill.Parent = Pills
+	end
+
+	if weaponInfo.Category == "Gun" then
+		local gunInfo = weaponInfo.ItemInfo :: GunInfo
+		local baseline = GUN_BASELINES[gunInfo.FireType] or GUN_BASELINES.Auto
+		local shotsPerSecond = firerateToShotsPerSecond(gunInfo.Firerate)
+		local estimatedDPS = gunInfo.Damage * shotsPerSecond
+
+		local rawDamageScore = normalized(gunInfo.Damage, baseline.damage.min, baseline.damage.max)
+		local dpsDamageScore = normalized(estimatedDPS, baseline.dps.min, baseline.dps.max)
+		local damageScore = clamp01(rawDamageScore * 0.4 + dpsDamageScore * 0.6)
+		local rateScore = normalized(shotsPerSecond, baseline.firerate.min, baseline.firerate.max)
+
+		-- Lower recoil handles better, so invert the normalized score.
+		local handleScore = 1 - normalized(gunInfo.Recoil, baseline.recoil.min, baseline.recoil.max)
+
+		-- Reward bigger clips and fast reloads, but punish the combo of tiny clip + slow reload.
+		local clipScore = normalized(gunInfo.Bullets, baseline.clip.min, baseline.clip.max) * 0.55
+			+ (1 - normalized(gunInfo.ReloadTime, baseline.reload.min, baseline.reload.max)) * 0.45
+
+		if gunInfo.Bullets <= baseline.clip.min + 2 and gunInfo.ReloadTime >= baseline.reload.max - 0.2 then
+			clipScore *= 0.75
+		end
+
+		local zoomScore = scoreZoomFOV(gunInfo.ZoomFOV)
+
+		createBar("DMG", damageScore)
+		createBar("RATE", rateScore)
+		createBar("HANDLE", handleScore)
+		createBar("CLIP", clipScore)
+		createBar("ZOOM", zoomScore)
+
+		local damageColor = DAMAGE_TYPE_TO_COLOR[gunInfo.DamageType] or Color3.new(1, 1, 0)
+		createPill(gunInfo.DamageType, damageColor)
+	else
+		createBar("DMG", 0)
+		createBar("RATE", 0)
+		createBar("HANDLE", 0)
+		createBar("CLIP", 0)
+		createBar("ZOOM", 0)
+	end
+
+	for _, pill: Pill in ipairs(weaponInfo.Pills) do
+		createPill(pill.Text, pill.Color)
+	end
+end
+
+function ShopUI:SelectWeapon(weaponName: string)
+	if self.purchaseInProgress then
+		warn("Can't select weapon while purchase is in progress")
+		self:PlaySound("Error")
+		return
+	end
+
+	local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
+	if not weaponInfo then
+		warn("No weapon info", weaponName)
+		return
+	end
+
+	self.currentWeaponName = weaponName
+
+	self.LoreBox.TextLabel.Text = weaponInfo.Lore
+	self.WeaponInfo.WeaponTitle.Text = weaponInfo.Name
+	self.WeaponStats.SpecialText.Text = weaponInfo.SpecialText
+	self:ApplySelectedWeaponState(weaponInfo)
+
+	self:SetupWeaponPreview(weaponName)
+	self:LoadStats(weaponInfo)
+end
+
+function ShopUI:SelectFilter(filterType: "Weight", filter)
+	if self.currentFilter == filter then
+		return
+	end
+
+	self.currentFilter = filter
+
+	if filterType == "Weight" then
+		local info = _queryAllWeapons({
+			category = self.shopInfo.Category,
+			weights = filter,
+		})
+		self:LoadWeaponInfos(info)
+	else
+		warn("unimplemented", filterType)
+	end
+end
+
+function ShopUI:UpdateWeaponInfos()
+	for _, infoFrame in ipairs(self.currentWeaponInfoButtons) do
+		local title = infoFrame.Title :: TextLabel
+		local weaponName = title.Text
+		local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
+		if not weaponInfo then
+			warn("No weapon info", weaponName)
+			continue
+		end
+
+		self:ApplyWeaponFrameState(infoFrame, weaponInfo)
+	end
+end
+
+function ShopUI:LoadWeaponInfos(info: { WeaponInfo })
+	local selectionReference = self.ScrollingFrame.Reference
+	self.currentWeaponInfoButtons = {}
+
+	-- remove existing frames
+	for _, child in ipairs(self.ScrollingFrame:GetChildren()) do
+		if child:IsA("TextButton") and child.Name ~= "Reference" then
+			child:Destroy()
+		end
+	end
+
+	for _, weaponInfo: WeaponInfo in ipairs(info) do
+		local weaponTextButton = selectionReference:Clone() :: TextButton
+		weaponTextButton.Visible = true
+		table.insert(self.currentWeaponInfoButtons, weaponTextButton)
+
+		local DisplayImage = weaponTextButton.ImageLabel :: ImageLabel
+		local Cost = weaponTextButton.Cost :: TextLabel
+		local Level = weaponTextButton.Level :: TextLabel
+		local Title = weaponTextButton.Title :: TextLabel
+		weaponTextButton.Name = weaponInfo.Name
+
+		DisplayImage.Image = weaponInfo.PreviewImage
+		Title.Text = weaponInfo.Name
+		Level.Text = "LVL " .. weaponInfo.Level
+		Cost.Text = "※ " .. weaponInfo.Price
+		weaponTextButton.Parent = self.ScrollingFrame
+
+		self:ApplyWeaponFrameState(weaponTextButton, weaponInfo)
+
+		weaponTextButton.MouseButton1Down:Connect(function()
+			self:SelectWeapon(weaponInfo.Name)
+		end)
+
+		self:HookBaseButtonSounds(weaponTextButton, 0.04)
+	end
+end
+
+function ShopUI:LoadFilters()
+	local filterReference = self.Filters.FilterReference
+	warn("Filter info:", self.shopInfo.Filters)
+	for _, filter: FilterInfo in ipairs(self.shopInfo.Filters) do
+		local filterFrame = filterReference:Clone()
+		local imageButton = filterFrame:WaitForChild("ImageButton") :: ImageButton
+		imageButton.Image = filter.Image
+
+		filterFrame.Name = filter.Name
+		filterFrame.LayoutOrder = filter.Order
+		filterFrame.Visible = true
+		filterFrame.Parent = self.Filters
+
+		imageButton.MouseButton1Down:Connect(function()
+			for _, button in ipairs(filterFrame.Parent:GetChildren()) do
+				if button:IsA("Frame") then
+					local imageButton = button:FindFirstChild("ImageButton")
+					if imageButton then
+						imageButton.ImageColor3 = Color3.new(1, 1, 1)
+					end
+				end
+			end
+
+			self:SelectFilter(filter.FilterType, filter.Name)
+			imageButton.ImageColor3 = Color3.new(0.533333, 0.533333, 0.533333)
+		end)
+	end
+end
+
+function ShopUI:HookBaseButtonSounds(button: TextButton | ImageButton, scaleModifierAmount: number?)
+	local scaleModifier = Instance.new("UIScale", button)
+
+	button.MouseEnter:Connect(function()
+		if not self.alive then
+			return
+		end
+		TweenService:Create(
+			scaleModifier,
+			TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+			{ Scale = 1 + (scaleModifierAmount or 0.07) }
+		):Play()
+
+		self:PlaySound("Hover")
+	end)
+
+	button.MouseLeave:Connect(function()
+		if not self.alive then
+			return
+		end
+		TweenService
+			:Create(scaleModifier, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 })
+			:Play()
+
+		self:PlaySound("EndHover")
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		if not self.alive then
+			return
+		end
+		self:PlaySound("Select")
+	end)
+end
+
+function ShopUI:PlaySound(soundName: string)
+	local sound = self.sounds[soundName]
+	if not sound then
+		warn(`No sound named {soundName} was found`)
+		return
+	end
+
+	sound:Play()
+end
+
+function ShopUI:LoadSounds()
+	for soundName, propertyList in pairs(SOUND_MAP) do
+		local newSound = Instance.new("Sound", workspace)
+		newSound.Name = soundName .. "UI"
+
+		for propertName, _ in pairs(propertyList) do
+			newSound[propertName] = propertyList[propertName]
+		end
+
+		self.sounds[soundName] = newSound
+	end
+end
+
+function ShopUI:PurchaseCurrentItem()
+	if not self.alive then
+		return
+	end
+
+	local selectedWeaponName = self.currentWeaponName or self.WeaponInfo.WeaponTitle.Text
+	local weaponInfo = _getWeaponInfo(selectedWeaponName)
+	if not weaponInfo then
+		warn("No weapon info for", selectedWeaponName)
+		return
+	end
+
+	local isOwned = self:OwnsWeapon(selectedWeaponName)
+	if isOwned then
+		warn("Purchase failed:", "Already owned")
+		self:PlaySound("Error")
+		return
+	end
+
+	-- We can initially validate it ourselves
+	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
+	if not result["isUnlocked"] then
+		warn("Purchase failed:", "Not unlocked")
+		self:PlaySound("Error")
+		return
+	end
+
+	if self.purchaseInProgress then
+		warn("Purchase failed:", "Already purchasing")
+		self:PlaySound("Error")
+		return
+	end
+
+	self.purchaseLoadingToken += 1
+	local purchaseLoadingToken = self.purchaseLoadingToken
+
+	local function endPurchase()
+		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 1, 1)
+		self.purchaseInProgress = false
+		self.purchaseLoadingToken += 1
+		self:ExitLoadingState()
+	end
+
+	self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
+	self.purchaseInProgress = true
+
+	task.delay(PURCHASE_LOADING_DELAY, function()
+		if not self.purchaseInProgress then
+			return
+		end
+
+		if self.purchaseLoadingToken ~= purchaseLoadingToken then
+			return
+		end
+
+		self:StartLoadingState()
+	end)
+
+	-- Our own validation passed, let's see if the server agrees
+	local success, message = Remotes.RequestPurchase:InvokeServer(selectedWeaponName)
+	if not success then
+		warn("Purchase failed:", message)
+		self:PlaySound("Error")
+		endPurchase()
+		return
+	end
+
+	self:PlaySound("Purchase")
+	endPurchase()
+end
+
+function ShopUI:InitButtons()
+	self.Exit.MouseButton1Down:Connect(function()
+		if self.purchaseInProgress then
+			warn("Can't exit while purchase is in progress")
+			self:PlaySound("Error")
+			return
+		end
+		self:Hide(true)
+	end)
+
+	for _, desc in ipairs(self.MainFrame:GetDescendants()) do
+		if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+			self:HookBaseButtonSounds(desc)
+		end
+	end
+
+	self.PurchaseButton.MouseButton1Down:Connect(function()
+		self:PurchaseCurrentItem()
+	end)
+end
+
+function ShopUI:InitLoadingScreen()
+	local rotationTween = TweenService:Create(
+		self.LoadingIcon,
+		TweenInfo.new(0.4, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+		{ Rotation = 360 }
+	)
+	rotationTween:Play()
+end
+
+function ShopUI:Init()
+	self:UpdateCurrencyDisplay(getCurrentMoney())
+	self.MainFrame.Level.Text = "LVL " .. tostring(getCurrentLevel())
+	self:LoadFilters()
+	self:LoadSounds()
+	self:InitButtons()
+	self:InitLoadingScreen()
+	self:SetupRenderConnect()
+	self:ListenForPurchase()
+	self:UpdateOwnedWeapons()
+	self:Show(true)
+
+	_getAllWeaponInfosForCategory(self.shopInfo.Category)
+	self:SelectFilter(self.shopInfo.Filters[1].FilterType, self.shopInfo.Filters[1].Name)
+end
+
+function ShopUI:ListenForPurchase()
+	if self.purchaseConnection then
+		self.purchaseConnection:Disconnect()
+	end
+
+	if self.currencyConnection then
+		self.currencyConnection:Disconnect()
+	end
+
+	local leaderstats = Player:WaitForChild("leaderstats")
+	local credits = leaderstats:WaitForChild("Credits") :: NumberValue
+	self.currencyConnection = credits:GetPropertyChangedSignal("Value"):Connect(function()
+		self:UpdateCurrencyDisplay(credits.Value)
+	end)
+
+	self.purchaseConnection = Remotes.ItemPurchased.OnClientEvent:Connect(function(weaponName)
+		self:UpdateOwnedWeapons()
+		self:UpdateWeaponInfos()
+
+		if self.currentWeaponName == weaponName then
+			self:SelectWeapon(weaponName)
+		end
+	end)
+end
+
+function ShopUI:SetupRenderConnect()
+	if self.connection then
+		self.connection:Disconnect()
+	end
+
+	self.connection = RunService.RenderStepped:Connect(function()
+		if not self.alive or Camera.CameraType ~= Enum.CameraType.Scriptable then
+			return
+		end
+
+		local viewportSize = Camera.ViewportSize
+		if viewportSize.X <= 0 or viewportSize.Y <= 0 then
+			return
+		end
+
+		local mouse = UserInputService:GetMouseLocation()
+		local normalizedX = ((mouse.X / viewportSize.X) - 0.5) * 2
+		local normalizedY = ((mouse.Y / viewportSize.Y) - 0.5) * 2
+
+		local rightOffset = normalizedX * CAMERA_MOUSE_INFLUENCE
+		local upOffset = -normalizedY * CAMERA_MOUSE_INFLUENCE
+
+		local targetCFrame = self.baseCameraCFrame * CFrame.new(rightOffset, upOffset, 0)
+		Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, CAMERA_LERP_ALPHA)
+	end)
+end
+
+function ShopUI:Show(entering: boolean)
+	self.alive = true
+
+	if entering then
+		lockCamera()
+		self.baseCameraCFrame = self.CameraPart.CFrame
+		tweenCameraCFrame(self.CameraPart.CFrame)
+		self.ShopMusic:Play()
+		Player:SetAttribute("InShop", true)
+	end
+
+	self:TweenBlur(24)
+	self:TweenTintColor(Color3.new(0.647059, 0.647059, 0.647059))
+
+	local main = self.MainFrame :: Frame
+	main:TweenPosition(UDim2.new(0.5, 0, 0.5, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 1.5, true)
+end
+
+function ShopUI:Hide(exitting: boolean)
+	self.alive = false
+	local main = self.MainFrame :: Frame
+
+	if exitting then
+		returnCamera()
+		TweenService
+			:Create(self.ShopMusic, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Volume = 0 })
+			:Play()
+		Player:SetAttribute("InShop", false)
+	end
+
+	self:TweenBlur(0)
+	self:TweenTintColor(Color3.new(1, 1, 1))
+
+	main:TweenPosition(UDim2.new(0.5, 0, 2, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 1, true, function()
+		if exitting then
+			task.delay(3, function()
+				self:Destroy()
+			end)
+		end
+	end)
+end
+
+function ShopUI:TweenBlur(newSize)
+	if not self.blurEffect then
+		return
+	end
+	TweenService
+		:Create(
+			self.blurEffect,
+			TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+			{ Size = newSize }
+		)
+		:Play()
+end
+
+function ShopUI:TweenTintColor(newColor: Color3)
+	if not self.colorCorrection then
+		return
+	end
+	TweenService:Create(
+		self.colorCorrection,
+		TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+		{ TintColor = newColor }
+	):Play()
+end
+
+function ShopUI:Destroy()
+	self:ClearWeaponPreview()
+
+	if self.connection then
+		self.connection:Disconnect()
+		self.connection = nil
+	end
+
+	if self.purchaseConnection then
+		self.purchaseConnection:Disconnect()
+		self.purchaseConnection = nil
+	end
+
+	if self.currencyConnection then
+		self.currencyConnection:Disconnect()
+		self.currencyConnection = nil
+	end
+
+	self.currencyAnimationToken += 1
+
+	self.blurEffect:Destroy()
+	self.colorCorrection:Destroy()
+	self.gui:Destroy()
+
+	for _, sound in pairs(self.sounds) do
+		sound:Destroy()
+	end
+end
+
+return ShopUI
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="8">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="9">
+      <Properties>
+        <string name="Name">DataAPI</string>
+      </Properties>
+      <Item class="ModuleScript" referent="10">
+        <Properties>
+          <string name="Name">API</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE API MODULE
+   
+   @module API
+   @author mezz_inc
+   @description Provides the toplevel control for the dataAPI system
+   
+   @within ServerScriptService/DataAPI
+   
+   
+   Initialization
+   
+]]
+------------------------------------------------------------------------------------
+
+local Module = {}
+
+--- Name of the module
+local NAME: string = "API"
+
+local Players = game:GetService("Players")
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DatastoreRep = ReplicatedStorage:WaitForChild("Datastore")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+Module._meta = {
+	name = NAME,
+	version = "1.0.0",
+	description = "Top-level control of the DataAPI with player-centric functionality",
+}
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Dependant modules
+local Core = require(DataAPI.Core)
+local Debug = require(DataAPI.Debug)
+local Types = require(DataAPI.Types)
+local Schema = require(DataAPI.Schema)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+export type ErrorType = Types.ErrorType
+export type Store = Types.Store
+export type ValidDatastoreEntryTypes = Types.ValidDatastoreEntryTypes
+export type ValidDatastoreKey = Types.ValidDatastoreKey
+export type ValidDatastoreValue = Types.ValidDatastoreValue
+export type ValidPlayer = Types.ValidPlayer
+export type ValidStores = Types.ValidStores
+export type PlayerRank = Types.PlayerRanks
+
+--[[----------------------------------------------------------------------------------
+
+	Debug
+	Mostly wrapper functions for the Debug module
+
+]]
+----------------------------------------------------------------------------------
+
+--- The source name of the module for debugging
+local SOURCE_NAME: string = `[DataAPI.{NAME}]`
+
+--- Prints out a debug message if debug is enabled
+--- @param ... any? a variable number of arguments to prin
+local function debugPrint(...)
+	Debug.debugPrint(SOURCE_NAME, ...)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	Debug.debugWarn(SOURCE_NAME, ...)
+end
+
+--- Raise an error to the output
+--- @param ... string? a variable number of strings/types to print
+------------------------- Module
+
+--[[----------------------------------------------------------------------------------
+
+	LOCAL FUNCTIONS
+	
+]]
+----------------------------------------------------------------------------------
+
+local function yieldToLoad()
+	--- not debug warn as this is for YOU buddy
+	if not Core.isLoaded() then
+		warn("Attempt to access the Data API too early - yielding until fully loaded")
+
+		while not Core.isLoaded() do
+			task.wait(0.5)
+		end
+	end
+end
+
+--- Returns whether a store should be served through the player's data folder.
+--- @param storeName ValidStores the store to check
+--- @return boolean served whether the store is hot-served
+local function storeIsServed(storeName: ValidStores): boolean
+	return Schema.isServedStore(storeName)
+end
+
+--- Checks if a player is in the server
+--- @param playerId number the id of the player to check
+--- @return boolean if the player is in the server
+local function playerInServer(playerId: number): boolean
+	if script:GetAttribute("pretendPlayersDontExist") then
+		return false
+	end
+	local Player = Players:GetPlayerByUserId(playerId) :: Player?
+
+	if Player then
+		--- might as well get the datastore at this point, they're not even loaded
+		local dataFolder = Player:FindFirstChild("Data")
+		if not dataFolder then
+			return false
+		end
+	end
+	return Player ~= nil
+end
+
+--- Returns a safe UserId from a player
+--- @param Player ValidPlayer the player to get the UserId of
+--- @return number the UserId of the player
+local function getSafeUserId(Player: ValidPlayer): number
+	if type(Player) == "number" then
+		return Player
+	elseif typeof(Player) == "Instance" then
+		if not Player:IsA("Player") then
+			warn(`Provided argument cannot be converted into a UserId - Type: {Player.ClassName or "nil"}`)
+			return 0
+		else
+			return Player.UserId
+		end
+	elseif typeof(Player) == "string" then
+		--- Player username
+		if Players:FindFirstChild(Player) then
+			return Players[Player].UserId
+		else
+			--- Is an ID just a string
+			local isNumber = tonumber(Player)
+			if not isNumber then
+				warn(`Provided string argument cannot be converted into a UserId or username - {Player}`)
+				return 0
+			else
+				return isNumber
+			end
+		end
+	else
+		warn(`Provided argument cannot be converted into a UserId - Type: {typeof(Player)}`)
+		return 0
+	end
+end
+
+--- Returns the store object from the store name
+--- @param Player ValidPlayer the player to get the UserId of
+--- @param storeName ValidStores the name of the store to get
+--- @return entry ValidDatastoreEntryTypes the data
+local function getPlayerEntry(Player: ValidPlayer, storeName: ValidStores)
+	local store = Core.getStore(storeName)
+	local playerId = getSafeUserId(Player)
+	local _, result = store:GetEntry(playerId)
+	return result
+end
+
+--- Overwrites a player's data for a storename entirely - primarily used for ordered datastores
+--- Avoid using for flat stores
+--- @param Player ValidPlayer the player to get the UserId of
+--- @param storeName ValidStores the name of the store to set the data in
+--- @param newData any the data to set the store to
+--- @return success boolean whether it was able to be done
+local function setPlayerEntry(Player: ValidPlayer, storeName: ValidStores, newData: any): boolean
+	local store = Core.getStore(storeName)
+	local playerId = getSafeUserId(Player)
+	return store:SetEntry(playerId, newData)
+end
+
+--- Sets a new value for a key in a store
+--- @param Player ValidPlayer the player to get the UserId of
+--- @param storeName ValidStores the name of the store to set the data in
+--- @param dataKey string the key of the data to set
+--- @param newDataValue any the value to set the key to
+--- @return success boolean whether it succeded
+local function setPlayerEntryData(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	dataKey: string,
+	newDataValue: ValidDatastoreValue
+): boolean
+	local playerId = getSafeUserId(Player)
+	local store = Core.getStore(storeName)
+	local entry = getPlayerEntry(playerId, storeName)
+
+	if not entry then
+		warn(`Missing store name or key. Key: {playerId}, storeName: {storeName}`)
+		return false
+	end
+
+	if entry[dataKey] == nil then
+		warn(`Key {dataKey} is not a valid key for the entry`)
+		return false
+	end
+
+	entry[dataKey] = newDataValue
+	return store:SetEntry(playerId, entry) :: boolean
+end
+
+--- Attempts to increment a datastore value
+--- @param Player ValidPlayer the player to get the UserId of
+--- @param storeName ValidStores the name of the store to set the data in
+--- @param dataKey string the key of the data to increment
+--- @param incrementAmount number the amount to increment by
+--- @return currentNumber number the current value of the datastore or 0 if failed
+local function incrementPlayerEntryData(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	dataKey: string,
+	incrementAmount: number
+): number
+	local playerId = getSafeUserId(Player)
+	local store = Core.getStore(storeName)
+	local entry = getPlayerEntry(playerId, storeName)
+
+	if entry[dataKey] == nil then
+		warn(`Key {dataKey} is not a valid key for the entry`)
+		return 0
+	end
+
+	-- Verify this is a number first of all
+	local result = entry[dataKey]
+	if type(result) ~= "number" then
+		warn(`Attempt to increment key {dataKey} even though it's not a number - no change done`)
+		return 0
+	end
+
+	local currentAmount = result + incrementAmount
+	entry[dataKey] = currentAmount
+
+	local success = store:SetEntry(playerId, entry)
+	if not success then
+		return 0
+	end
+
+	return currentAmount
+end
+
+--[[----------------------------------------------------------------------------------
+
+	LIVE STATS
+	Frequently updated information (lingo being stat)
+	Stats should not constantly write to datastores when changed, so it's done
+	via instances instead
+	
+]]
+----------------------------------------------------------------------------------
+
+--- Attempts to retrieve a player's Data folder in their player instance
+--- Player must be in server
+--- @param userId number the id of the player to get the folder of
+--- @return DataFolder Folder the Data folder of the player
+local function getPlayerDataFolder(userId: number): Folder?
+	local Player = Players:GetPlayerByUserId(userId)
+	if not Player then
+		warn(`Provided ID {userId} is not in the server or not fully loaded`)
+		return nil
+	end
+
+	local Data = Player:FindFirstChild("Data") :: Instance?
+	return Data
+end
+
+--- Attempts to get a store folder from a player's Data folder
+--- @param userId number the id of the player to get the folder of
+--- @param storeName ValidStores the name of the store to get
+--- @return store Folder the store folder
+local function getPlayerDataFolderStore(userId: number, storeName: ValidStores): Folder?
+	local dataFolder = getPlayerDataFolder(userId)
+	if not dataFolder then
+		warn("Could not get the data folder for provided player:", userId)
+		return nil
+	end
+
+	local store = dataFolder:FindFirstChild(storeName, true)
+	if not store then
+		--- Early store access will yield
+		for _ = 1, 4 do
+			store = dataFolder:FindFirstChild(storeName, true)
+			if store then
+				return store
+			end
+			task.wait(1)
+		end
+
+		warn(`Could not find store name "{storeName}" in player's data folder`)
+		return nil
+	end
+
+	return store
+end
+
+--- Attempts to get a stat instance from a player's Data folder
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param statName string the name of the stat to get
+--- @return stat ValueBase? the stat instance
+local function getStatInstance(Player: ValidPlayer, storeName: ValidStores, statName: string): ValueBase | nil
+	local userId = getSafeUserId(Player)
+
+	local store = getPlayerDataFolderStore(userId, storeName) :: Folder?
+	if not store then
+		return nil
+	end
+
+	local statValue = store:FindFirstChild(statName) :: ValueBase?
+	if not statValue then
+		warn(`Could not find value "{statName}" in player's data folder for store {storeName}`)
+		return nil
+	end
+
+	return statValue
+end
+
+--- Attempts to set a player's stat in the server
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param statName string the name of the stat to set
+--- @param statValue ValidDatastoreEntryTypes the value to set the stat to
+--- @return success whether it succeded in changing the value
+local function setPlayerStat(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	statName: string,
+	statValue: ValidDatastoreEntryTypes
+): boolean
+	local value = getStatInstance(Player, storeName, statName) :: ValueBase
+	if not value then
+		return false
+	end
+	value.Value = statValue
+	return true
+end
+
+--- Adds a certain amount to a specific stat for a player in the server
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param statName string the name of the stat to set
+--- @param incrementNumber number the amount to add to the current stat value
+--- @return amount number the new amount, 0 if not found
+local function incrementPlayerStat(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	statName: string,
+	incrementNumber: number
+): number
+	local value = getStatInstance(Player, storeName, statName) :: ValueBase
+	if not value then
+		return 0
+	end
+
+	local newAmount = value.Value + incrementNumber
+	value.Value = newAmount
+	return newAmount
+end
+
+--[[----------------------------------------------------------------------------------
+
+	NEWEST FUNCTIONS
+	These are the data grabbers. Their main purpose is to check if the player
+	we're trying to get the data of IS in the server.
+	
+	If they are in the server, we're going to check their stat folder, not their datastore.
+	If they aren't, we do their datastore. Simple, no?
+	
+]]
+----------------------------------------------------------------------------------
+
+--- Returns the most recent store entry for a player
+--- If the player shares the server with the current, it returns that store
+--- Otherwise it returns the store from the datastore itself
+--- @param Player ValidPlayer player id or object
+--- @param storeName ValidStores the name of the store to get
+local function getNewestEntry(Player: ValidPlayer, storeName: ValidStores)
+	yieldToLoad()
+	local userId = getSafeUserId(Player)
+	local isInServer = playerInServer(userId)
+
+	if isInServer then
+		debugPrint(`Player {Player} is in the server - getting stat folder`)
+
+		if not storeIsServed(storeName) then
+			debugPrint(`Store {storeName} is cold-only - getting datastore`)
+			return getPlayerEntry(Player, storeName)
+		end
+
+		local store = getPlayerDataFolderStore(userId, storeName)
+		if not store then
+			return getPlayerEntry(Player, storeName)
+		end
+
+		--- Ordered ones
+		if not store:IsA("Folder") then
+			return store.Value
+		end
+
+		local instances = store:GetChildren()
+		--print(store, instances)
+		return Schema.instancesToTable(instances)
+	else
+		debugPrint(`Player {Player} is not in the server - getting datastore`)
+
+		--- Get datastore information
+		return getPlayerEntry(Player, storeName)
+	end
+end
+
+--- Attempts to update the most recent entry data for a player
+--- If the player shares the server with the current, it updates their stat folder
+--- Otherwise it updates the store in the datastore itself
+--- @param Player ValidPlayer player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param keyName string the name of the key to update
+--- @param newData any the new data to update the key with
+--- @return success whether it was able to alter the data
+local function updateNewestEntryData(Player: ValidPlayer, storeName: ValidStores, keyName: string, newData: any)
+	yieldToLoad()
+
+	local userId = getSafeUserId(Player)
+	local isInServer = playerInServer(userId)
+	local servedStore = storeIsServed(storeName)
+
+	if isInServer and servedStore then
+		debugPrint(`Player {Player} is in the server - updating stat folder`)
+
+		--- Update stat information
+		return setPlayerStat(Player, storeName, keyName, newData)
+	else
+		debugPrint(`Player {Player} is not in the server - updating datastore`)
+
+		--- Update datastore information
+		return setPlayerEntryData(Player, storeName, keyName, newData)
+	end
+end
+
+--- Returns a specific piece of data from a player's most recent store
+--- @param Player ValidPlayer player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param keyName string the name of the key to get
+--- @return value any the value of the data if it exists
+local function getNewestEntryData(Player: ValidPlayer, storeName: ValidStores, keyName: string)
+	yieldToLoad()
+
+	local tableEntry = getNewestEntry(Player, storeName)
+	if not tableEntry then
+		return nil
+	end
+
+	if tableEntry[keyName] == nil then
+		debugWarn(`{keyName} is missing from the entry {storeName}`)
+		return nil
+	end
+
+	return tableEntry[keyName]
+end
+
+--- Updates a number value in a player's most recent store
+--- @param Player ValidPlayer player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param newData string the name of the key to update
+--- @return success whether it was able to alter the data
+local function updateNewestOrderedEntry(Player: ValidPlayer, storeName: ValidStores, newData: number): boolean
+	yieldToLoad()
+
+	local userId = getSafeUserId(Player)
+	local isInServer = playerInServer(userId)
+
+	if isInServer then
+		debugPrint(`Player {Player} is in the server - updating stat folder`)
+
+		local value = getPlayerDataFolderStore(userId, storeName)
+		if not value or not value:IsA("ValueBase") then
+			warn("No value for the ordered data was found - are you sure it IS an ordered data store?")
+			return false
+		end
+
+		value.Value = newData
+
+		return true
+	else
+		debugPrint(`Player {Player} is not in the server - updating datastore`)
+
+		return setPlayerEntry(Player, storeName, newData)
+	end
+end
+
+--- Increments a number value in a player's most recent store, 0 if failed
+--- @param Player ValidPlayer player id or object
+--- @param storeName ValidStores the name of the store to get
+--- @param newAmount number the amount to increment the data by
+--- @return amount number the new amount
+local function incrementNewestOrderedEntry(Player: ValidPlayer, storeName: ValidStores, newAmount: number): number
+	yieldToLoad()
+
+	local userId = getSafeUserId(Player)
+	local isInServer = playerInServer(userId)
+
+	if isInServer then
+		debugPrint(`Player {Player} is in the server - updating stat folder`)
+
+		local value = getPlayerDataFolderStore(userId, storeName)
+		if not value or not value:IsA("ValueBase") then
+			warn("No value for the ordered data was found - are you sure it IS an ordered data store?")
+			return 0
+		end
+
+		local curAmount = value.Value
+		value.Value = curAmount + newAmount
+
+		return value.Value
+	else
+		debugPrint(`Player {Player} is not in the server - updating datastore`)
+		local Store = Core.getStore(storeName)
+		local _, amount = Store:GetEntry(userId)
+		setPlayerEntry(Player, storeName, amount + newAmount)
+		return amount + newAmount
+	end
+end
+
+--- Increments a players data from its newest entry and returns the new amount, 0 if failed
+--- @param Player ValidPlayer the player to get the UserId of
+--- @param storeName ValidStores the name of the store to get
+--- @param keyName string the name of the key to increment
+--- @param incrementAmount number the amount to increment the data by
+--- @return newAmount number the new amount after incrementing
+local function incrementNewestEntry(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	keyName: string,
+	incrementAmount: number
+): number
+	yieldToLoad()
+
+	local userId = getSafeUserId(Player)
+	local isInServer = playerInServer(userId)
+	local servedStore = storeIsServed(storeName)
+
+	if isInServer and servedStore then
+		return incrementPlayerStat(Player, storeName, keyName, incrementAmount)
+	else
+		return incrementPlayerEntryData(Player, storeName, keyName, incrementAmount)
+	end
+end
+
+--- Returns a table entry from a store when the entry is dictionary-shaped.
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the store to inspect
+--- @return {[string]: ValidDatastoreValue}? tableEntry the table entry if it exists
+local function getPlayerTableEntry(Player: ValidPlayer, storeName: ValidStores)
+	if storeIsServed(storeName) then
+		warn(`Store {storeName} is served and does not expose table-backed data`)
+		return nil
+	end
+
+	local entry = getNewestEntry(Player, storeName)
+	if type(entry) ~= "table" then
+		warn(`Store {storeName} does not contain table data`)
+		return nil
+	end
+
+	return entry
+end
+
+--- Sets an entire table entry in a cold store.
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the store to update
+--- @param newTable {[string]: ValidDatastoreValue} the table to store
+--- @return boolean success whether it was able to be done
+local function setPlayerTableEntry(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	newTable: { [string]: ValidDatastoreValue }
+): boolean
+	if storeIsServed(storeName) then
+		warn(`Store {storeName} is served and cannot be replaced with a table entry`)
+		return false
+	end
+
+	return setPlayerEntry(Player, storeName, newTable)
+end
+
+--- Returns a key from a table-backed store entry.
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the store to inspect
+--- @param dataKey string the key to retrieve
+--- @return ValidDatastoreValue? value the value if it exists
+local function getPlayerTableEntryData(Player: ValidPlayer, storeName: ValidStores, dataKey: string)
+	local entry = getPlayerTableEntry(Player, storeName)
+	if not entry then
+		return nil
+	end
+
+	if entry[dataKey] == nil then
+		warn(`Key {dataKey} is not a valid key for the entry`)
+		return nil
+	end
+
+	return entry[dataKey]
+end
+
+--- Sets a key within a table-backed store entry.
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the store to update
+--- @param dataKey string the key to update
+--- @param newDataValue ValidDatastoreValue the value to store
+--- @return boolean success whether it was able to be done
+local function setPlayerTableEntryData(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	dataKey: string,
+	newDataValue: ValidDatastoreValue
+): boolean
+	if storeIsServed(storeName) then
+		warn(`Store {storeName} is served and cannot use table-edit helpers`)
+		return false
+	end
+
+	return updateNewestEntryData(Player, storeName, dataKey, newDataValue)
+end
+
+--- Increments a number inside a table-backed store entry.
+--- @param Player ValidPlayer a player id or object
+--- @param storeName ValidStores the store to update
+--- @param dataKey string the key to increment
+--- @param incrementAmount number the amount to add
+--- @return number amount the new amount
+local function incrementPlayerTableEntryData(
+	Player: ValidPlayer,
+	storeName: ValidStores,
+	dataKey: string,
+	incrementAmount: number
+): number
+	if storeIsServed(storeName) then
+		warn(`Store {storeName} is served and cannot use table-edit helpers`)
+		return 0
+	end
+
+	return incrementNewestEntry(Player, storeName, dataKey, incrementAmount)
+end
+
+--[[----------------------------------------------------------------------------------
+	INVENTORY FUNCTIONS
+	High-level helpers for owned items, loadouts, and active loadout.
+]]
+----------------------------------------------------------------------------------
+
+export type PlayerLoadout = {
+	[string]: { string },
+}
+
+export type PlayerLoadouts = {
+	[string]: PlayerLoadout,
+}
+
+export type PlayerInventory = {
+	_version: string,
+	_served: boolean,
+	OwnedItems: { string },
+	Loadouts: PlayerLoadouts,
+	ActiveLoadout: string,
+}
+
+local function deepCopy(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+
+	local copied = {}
+	for key, innerValue in pairs(value) do
+		copied[key] = deepCopy(innerValue)
+	end
+
+	return copied
+end
+
+local function getDefaultInventoryTemplate(): PlayerInventory
+	local scheme = Schema.getSchemaForStore("Inventory")
+	return deepCopy(scheme) :: PlayerInventory
+end
+
+local function resetPlayerLoadoutsToDefault(Player: ValidPlayer): boolean
+	local inventoryEntry = getNewestEntry(Player, "Inventory")
+	if type(inventoryEntry) ~= "table" then
+		warn("Could not reset inventory loadouts - entry is malformed")
+		return false
+	end
+
+	local defaults = getDefaultInventoryTemplate()
+	inventoryEntry._version = defaults._version
+	inventoryEntry.Loadouts = deepCopy(defaults.Loadouts)
+	inventoryEntry.ActiveLoadout = defaults.ActiveLoadout
+
+	return setPlayerEntry(Player, "Inventory", inventoryEntry)
+end
+
+local function ensureInventoryLoadoutVersion(Player: ValidPlayer): boolean
+	local inventoryEntry = getNewestEntry(Player, "Inventory")
+	if type(inventoryEntry) ~= "table" then
+		warn("Inventory entry is malformed", type(inventoryEntry))
+		return false
+	end
+
+	local defaults = getDefaultInventoryTemplate()
+	if inventoryEntry._version ~= defaults._version then
+		debugWarn("Inventory version mismatch detected, resetting loadouts to defaults")
+		return resetPlayerLoadoutsToDefault(Player)
+	end
+
+	if type(inventoryEntry.Loadouts) ~= "table" or type(inventoryEntry.ActiveLoadout) ~= "string" then
+		debugWarn("Inventory loadout structure is malformed, resetting loadouts to defaults")
+		return resetPlayerLoadoutsToDefault(Player)
+	end
+
+	return true
+end
+
+--- Returns the full inventory entry for a player.
+--- @param Player ValidPlayer player id or object
+--- @return PlayerInventory? inventory the player's inventory entry
+local function getAllPlayerInventory(Player: ValidPlayer): PlayerInventory?
+	if not ensureInventoryLoadoutVersion(Player) then
+		return nil
+	end
+
+	return getNewestEntry(Player, "Inventory") :: PlayerInventory?
+end
+
+--- Returns all owned item ids for a player.
+--- @param Player ValidPlayer player id or object
+--- @return {string} ownedItems list of owned item ids
+local function getPlayerOwnedItems(Player: ValidPlayer): { string }
+	local inventory = getAllPlayerInventory(Player)
+	if not inventory or type(inventory.OwnedItems) ~= "table" then
+		return {}
+	end
+
+	return inventory.OwnedItems
+end
+
+--- Returns true if a player owns a specific item id.
+--- @param Player ValidPlayer player id or object
+--- @param itemId string the item id to check
+--- @return boolean owns whether the item is owned
+local function playerOwnsItem(Player: ValidPlayer, itemId: string): boolean
+	if itemId == "" then
+		return false
+	end
+
+	local ownedItems = getPlayerOwnedItems(Player)
+	return table.find(ownedItems, itemId) ~= nil
+end
+
+--- Adds an item id to a player's owned items list.
+--- @param Player ValidPlayer player id or object
+--- @param itemId string the item id to add
+--- @return boolean success whether the operation succeeded
+local function addPlayerOwnedItem(Player: ValidPlayer, itemId: string): boolean
+	if itemId == "" then
+		warn("Cannot add empty itemId to owned items")
+		return false
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return false
+	end
+
+	local ownedItems = getPlayerOwnedItems(Player)
+	if table.find(ownedItems, itemId) then
+		return true
+	end
+
+	table.insert(ownedItems, itemId)
+	return setPlayerTableEntryData(Player, "Inventory", "OwnedItems", ownedItems)
+end
+
+--- Removes an item id from a player's owned items list.
+--- @param Player ValidPlayer player id or object
+--- @param itemId string the item id to remove
+--- @return boolean success whether the operation succeeded
+local function removePlayerOwnedItem(Player: ValidPlayer, itemId: string): boolean
+	if itemId == "" then
+		warn("Cannot remove empty itemId from owned items")
+		return false
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return false
+	end
+
+	local ownedItems = getPlayerOwnedItems(Player)
+	local itemIndex = table.find(ownedItems, itemId)
+	if not itemIndex then
+		return true
+	end
+
+	table.remove(ownedItems, itemIndex)
+	return setPlayerTableEntryData(Player, "Inventory", "OwnedItems", ownedItems)
+end
+
+--- Returns the full loadouts table.
+--- @param Player ValidPlayer player id or object
+--- @return PlayerLoadouts? loadouts the player's loadout map
+local function getPlayerLoadouts(Player: ValidPlayer): PlayerLoadouts?
+	local inventory = getAllPlayerInventory(Player)
+	if not inventory then
+		return nil
+	end
+
+	return inventory.Loadouts
+end
+
+--- Returns one named loadout.
+--- @param Player ValidPlayer player id or object
+--- @param loadoutName string the loadout name
+--- @return PlayerLoadout? loadout the requested loadout
+local function getPlayerLoadout(Player: ValidPlayer, loadoutName: string): PlayerLoadout?
+	if loadoutName == "" then
+		return nil
+	end
+
+	local loadouts = getPlayerLoadouts(Player)
+	if not loadouts then
+		return nil
+	end
+
+	return loadouts[loadoutName]
+end
+
+--- Sets or replaces a named loadout.
+--- @param Player ValidPlayer player id or object
+--- @param loadoutName string the loadout name
+--- @param loadoutData PlayerLoadout the full loadout payload
+--- @return boolean success whether the operation succeeded
+local function setPlayerLoadout(Player: ValidPlayer, loadoutName: string, loadoutData: PlayerLoadout): boolean
+	if loadoutName == "" then
+		warn("Cannot set loadout with empty name")
+		return false
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return false
+	end
+
+	local userId = getSafeUserId(Player)
+	local store = Core.getStore("Inventory")
+	return store:SetNestedEntry(userId, { "Loadouts", loadoutName }, loadoutData)
+end
+
+--- Retrieves a nested entry inside a named loadout.
+--- @param Player ValidPlayer player id or object
+--- @param loadoutName string the loadout name
+--- @param entryPath {ValidDatastoreKey} nested path inside the loadout
+--- @return ValidDatastoreValue? value the requested value
+local function getPlayerLoadoutEntry(
+	Player: ValidPlayer,
+	loadoutName: string,
+	entryPath: { ValidDatastoreKey }
+): ValidDatastoreValue?
+	if loadoutName == "" or #entryPath == 0 then
+		return nil
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return nil
+	end
+
+	local userId = getSafeUserId(Player)
+	local store = Core.getStore("Inventory")
+	local fullPath = { "Loadouts", loadoutName }
+	for _, pathPart in ipairs(entryPath) do
+		table.insert(fullPath, pathPart)
+	end
+
+	return store:GetNestedEntry(userId, fullPath)
+end
+
+--- Sets a nested entry inside a named loadout.
+--- @param Player ValidPlayer player id or object
+--- @param loadoutName string the loadout name
+--- @param entryPath {ValidDatastoreKey} nested path inside the loadout
+--- @param newValue ValidDatastoreValue value to write
+--- @return boolean success whether the operation succeeded
+local function setPlayerLoadoutEntry(
+	Player: ValidPlayer,
+	loadoutName: string,
+	entryPath: { ValidDatastoreKey },
+	newValue: ValidDatastoreValue
+): boolean
+	if loadoutName == "" or #entryPath == 0 then
+		warn("Cannot set loadout entry with empty name or path")
+		return false
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return false
+	end
+
+	local userId = getSafeUserId(Player)
+	local store = Core.getStore("Inventory")
+	local fullPath = { "Loadouts", loadoutName }
+	for _, pathPart in ipairs(entryPath) do
+		table.insert(fullPath, pathPart)
+	end
+
+	return store:SetNestedEntry(userId, fullPath, newValue)
+end
+
+--- Returns the active loadout name.
+--- @param Player ValidPlayer player id or object
+--- @return string? activeLoadout current active loadout name
+local function getPlayerActiveLoadout(Player: ValidPlayer): string?
+	if not ensureInventoryLoadoutVersion(Player) then
+		return nil
+	end
+
+	local activeLoadout = getNewestEntryData(Player, "Inventory", "ActiveLoadout")
+	if type(activeLoadout) ~= "string" then
+		return nil
+	end
+
+	return activeLoadout
+end
+
+--- Sets the active loadout name.
+--- @param Player ValidPlayer player id or object
+--- @param loadoutName string the loadout name to activate
+--- @return boolean success whether the operation succeeded
+local function setPlayerActiveLoadout(Player: ValidPlayer, loadoutName: string): boolean
+	if loadoutName == "" then
+		warn("Cannot set empty active loadout")
+		return false
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return false
+	end
+
+	if not getPlayerLoadout(Player, loadoutName) then
+		warn(`Loadout '{loadoutName}' does not exist`)
+		return false
+	end
+
+	return setPlayerTableEntryData(Player, "Inventory", "ActiveLoadout", loadoutName)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	DATASTORE
+	Information that is not updated frequently and can be safely read from datastores
+	
+]]
+----------------------------------------------------------------------------------
+
+--[[----------------------------------------------------------------------------------
+	GENERAL STORE
+	Attempt to get info from SOME store
+]]
+----------------------------------------------------------------------------------
+
+Module.getStore = Core.getStore
+Module.getStoreEntry = Core.getStoreEntry
+Module.getAllFlatStores = Core.getAllFlatStores
+Module.getAllOrderedStores = Core.getAllOrderedStores
+Module.updateStoreEntry = Core.updateStoreEntry
+Module.removeStoreEntry = Core.removeStoreEntry
+
+--[[----------------------------------------------------------------------------------
+	PLAYER INFO FUNCTIONS
+	This involves stats & such
+]]
+----------------------------------------------------------------------------------
+
+--- NOTE: Keep this updated with PlayerInfo.lua
+export type PlayerInfo = {
+	_version: string,
+	Kills: number,
+	Deaths: number,
+	Level: number,
+	Experience: number,
+	Completion: number,
+	Credits: number,
+	Rank: string,
+}
+
+export type ValidPlayerInfoKeys =
+	"_version"
+	| "Kills"
+	| "Deaths"
+	| "Level"
+	| "Experience"
+	| "Completion"
+	| "Rank"
+	| "Credits"
+
+--- Gets all the info for a player
+--- @param Player ValidPlayer player object or userId
+--- @return PlayerInfo list of player info
+local function getAllPlayerInfo(Player: ValidPlayer): PlayerInfo
+	return getNewestEntry(Player, "PlayerInfo")
+end
+
+--- Returns specific player info
+--- @param Player ValidPlayer player object or userid
+--- @param infoKey ValidPlayerInfoKey a info key
+--- @return number | string | nil info if it exists
+local function getPlayerInfo(Player: ValidPlayer, infoKey: ValidPlayerInfoKeys): number | string | nil
+	return getNewestEntryData(Player, "PlayerInfo", infoKey)
+end
+
+--- Returns a player's rank
+--- @param Player ValidPlayer player object or userid
+--- @return PlayerRank rank of the player
+local function getPlayerRank(Player: ValidPlayer): PlayerRank
+	return getNewestEntryData(Player, "PlayerInfo", "Rank")
+end
+
+--- Updates a player's current rank
+--- @param Player ValidPlayer player object or userid
+--- @param newRank PlayerRank the rank of the player
+--- @return success boolean whether it succeded
+local function setPlayerRank(Player: ValidPlayer, newRank: PlayerRank): boolean
+	return updateNewestEntryData(Player, "PlayerInfo", "Rank", newRank)
+end
+
+--- Attempts to update a player's info
+--- @param Player ValidPlayer player object or userid
+--- @param infoKey ValidPlayerInfoKey a info key
+--- @param newValue number | boolean | string new value for the info
+--- @return success boolean whether it succeded
+local function setPlayerInfo(Player: ValidPlayer, infoKey: ValidPlayerInfoKeys, newValue): boolean
+	if infoKey == "Kills" then
+		Module.setPlayerKillCount(Player, newValue)
+	end
+	return updateNewestEntryData(Player, "PlayerInfo", infoKey, newValue)
+end
+
+local function incrementPlayerInfo(Player: ValidPlayer, infoKey: ValidPlayerInfoKeys, incrementNumber: number): number
+	if infoKey == "Kills" then
+		Module.incrementKillCount(Player, incrementNumber)
+	end
+	return incrementNewestEntry(Player, "PlayerInfo", infoKey, incrementNumber)
+end
+
+--[[----------------------------------------------------------------------------------
+	PLAYER PREFERENCE FUNCTIONS
+	This involves performance/graphical settings & such
+]]
+----------------------------------------------------------------------------------
+
+--- NOTE: Keep this updated with Preferences.lua
+export type PlayerPreferences = {
+	_version: string,
+	LightingEffects: boolean,
+	CameraSway: boolean,
+	Materials: boolean,
+	DoomMusic: boolean,
+	DamageNumbers: boolean,
+	HealthBars: boolean,
+}
+
+export type ValidPlayerPreferenceKeys =
+	"_version"
+	| "LightingEffects"
+	| "CameraSway"
+	| "Materials"
+	| "DoomMusic"
+	| "DamageNumbers"
+	| "HealthBars"
+
+--- Retrieves a list of all player preferences
+--- @param Player ValidPlayer a player object or userid
+--- @return PlayerPreferences list of player preferences
+local function getAllPlayerPreferences(Player: ValidPlayer): PlayerPreferences
+	return getNewestEntry(Player, "Preferences")
+end
+
+--- Returns a specific player preference
+--- @param Player ValidPlayer a player object or userid
+--- @param prefKey ValidPlayerPreferenceKeys a preference key
+--- @return boolean | nil the preference if it exists
+local function getPlayerPreference(Player: ValidPlayer, prefKey: ValidPlayerPreferenceKeys): boolean
+	return getNewestEntryData(Player, "Preferences", prefKey)
+end
+
+--- Attempts to set a player's preference
+--- @param Player ValidPlayer a player object or userid
+--- @param prefKey ValidPlayerPreferenceKeys a preference key
+--- @param newPref boolean the new preference value
+--- @return success boolean whether ir was changed
+local function setPlayerPreference(Player: ValidPlayer, prefKey: ValidPlayerPreferenceKeys, newPref: boolean): boolean
+	return updateNewestEntryData(Player, "Preferences", prefKey, newPref)
+end
+
+--[[----------------------------------------------------------------------------------
+	PLAYER FLAG FUNCTIONS
+	This involves certain quirks to players (played before, etc)
+]]
+----------------------------------------------------------------------------------
+
+--- NOTE: Keep this updated with Flags.lua
+export type PlayerFlags = {
+	_version: string,
+	Played: boolean,
+	OldDataMigrated: boolean,
+	IsVeteran: boolean,
+}
+
+export type ValidPlayerFlagKeys = "_version" | "Played" | "OldDataMigrated" | "IsVeteran"
+
+--- Retrieves a list of all player flags
+--- @param Player ValidPlayer a player object or userid
+--- @return PlayerFlags list of player flags
+local function getAllPlayerFlags(Player: ValidPlayer): PlayerFlags
+	return getNewestEntry(Player, "Flags")
+end
+
+--- Returns a specific player flag
+--- @param Player ValidPlayer a player object or userid
+--- @param flagKey ValidPlayerFlagKeys a flag key
+--- @return boolean | nil the flag if it exists
+local function getPlayerFlag(Player: ValidPlayer, flagKey: ValidPlayerFlagKeys): boolean
+	return getNewestEntryData(Player, "Flags", flagKey)
+end
+
+--- Attempts to set a player's flag
+--- @param Player ValidPlayer a player object or userid
+--- @param flagKey ValidPlayerFlagKeys a flag key
+--- @param newFlagValue boolean the new flag value
+--- @return success whether it was changed
+local function setPlayerFlag(Player: ValidPlayer, flagKey: ValidPlayerFlagKeys, newFlagValue: boolean): boolean
+	return updateNewestEntryData(Player, "Flags", flagKey, newFlagValue)
+end
+
+--[[----------------------------------------------------------------------------------
+	ORDERED DATA FUNCTIONS
+	This involves specific numeral values to player data, such as leaderboard data
+]]
+----------------------------------------------------------------------------------
+
+--- Returns the amount of kills a player has stored
+--- @param Player ValidPlayer a player object or userid
+local function getPlayerKillCount(Player: ValidPlayer): number
+	return getNewestEntry(Player, "KillCount")
+end
+
+--- Changes the amount of kills a player has
+--- @param Player ValidPlayer a player object or userid
+--- @param newAmount number the new amount of kills
+--- @return success whether it was able to be done
+local function setPlayerKillCount(Player: ValidPlayer, newAmount: number): boolean
+	return updateNewestOrderedEntry(Player, "KillCount", newAmount)
+		and updateNewestEntryData(Player, "PlayerInfo", "Kills", newAmount)
+end
+
+--- Increments the kill count by a certain number, or 1. Returns the new amount
+--- @param Player ValidPlayer a player object or userid
+--- @param increment number? the number to increment by (defaults to 1)
+--- @return amount the new amount, 0 if failed
+local function incrementKillCount(Player: ValidPlayer, increment: number?): number
+	local amount = increment or 1
+	incrementNewestEntry(Player, "PlayerInfo", "Kills", amount)
+	return incrementNewestOrderedEntry(Player, "KillCount", amount)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Function Mapping
+
+]]
+----------------------------------------------------------------------------------
+
+Module.getAllPlayerInfo = getAllPlayerInfo
+Module.getPlayerInfo = getPlayerInfo
+Module.setPlayerInfo = setPlayerInfo
+Module.setPlayerRank = setPlayerRank
+Module.getPlayerRank = getPlayerRank
+Module.incrementPlayerInfo = incrementPlayerInfo
+
+Module.getPlayerTableEntry = getPlayerTableEntry
+Module.setPlayerTableEntry = setPlayerTableEntry
+Module.getPlayerTableEntryData = getPlayerTableEntryData
+Module.setPlayerTableEntryData = setPlayerTableEntryData
+Module.incrementPlayerTableEntryData = incrementPlayerTableEntryData
+
+Module.getAllPlayerInventory = getAllPlayerInventory
+Module.getPlayerOwnedItems = getPlayerOwnedItems
+Module.playerOwnsItem = playerOwnsItem
+Module.addPlayerOwnedItem = addPlayerOwnedItem
+Module.removePlayerOwnedItem = removePlayerOwnedItem
+Module.getPlayerLoadouts = getPlayerLoadouts
+Module.getPlayerLoadout = getPlayerLoadout
+Module.setPlayerLoadout = setPlayerLoadout
+Module.getPlayerLoadoutEntry = getPlayerLoadoutEntry
+Module.setPlayerLoadoutEntry = setPlayerLoadoutEntry
+Module.getPlayerActiveLoadout = getPlayerActiveLoadout
+Module.setPlayerActiveLoadout = setPlayerActiveLoadout
+Module.resetPlayerLoadoutsToDefault = resetPlayerLoadoutsToDefault
+
+Module.getAllPlayerPreferences = getAllPlayerPreferences
+Module.getPlayerPreference = getPlayerPreference
+Module.setPlayerPreference = setPlayerPreference
+
+Module.getAllPlayerFlags = getAllPlayerFlags
+Module.getPlayerFlag = getPlayerFlag
+Module.setPlayerFlag = setPlayerFlag
+
+Module.getPlayerKillCount = getPlayerKillCount
+Module.setPlayerKillCount = setPlayerKillCount
+Module.incrementKillCount = incrementKillCount
+
+--[[----------------------------------------------------------------------------------
+	INVOKES
+]]
+----------------------------------------------------------------------------------
+
+-- Utility for safe returns
+local function safeInvoke(handler: () -> any)
+	local success, result = pcall(handler)
+	if not success then
+		warn("ServerInvoke Error:", result)
+		return nil
+	end
+	return result
+end
+
+local function isValidKey(infoKey, storeName: ValidStores)
+	local scheme = Schema.getSchemaForStore(storeName)
+	return scheme[infoKey] ~= nil
+end
+
+-- Check if a player can access another's data (you can expand this logic)
+local function canAccess(Player: Player, target: Player?): boolean
+	if not target or not target:IsA("Player") then
+		return true
+	end
+	return (not target or target == Player)
+end
+
+DatastoreRep.getAllPlayerInfo.OnServerInvoke = function(Player, otherPlayer)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		return getAllPlayerInfo(otherPlayer or Player)
+	end)
+end
+
+DatastoreRep.getPlayerInfo.OnServerInvoke = function(Player, otherPlayer, infoKey)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+
+		if not isValidKey(infoKey, "PlayerInfo") then
+			warn(`[DataAPI] Invalid key received from {Player.Name}: {infoKey}`)
+			return nil
+		end
+		return getPlayerInfo(otherPlayer or Player, infoKey)
+	end)
+end
+
+DatastoreRep.getPlayerPreference.OnServerInvoke = function(Player, otherPlayer, prefName)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		if not isValidKey(prefName, "Preferences") then
+			return nil
+		end
+		return getPlayerPreference(otherPlayer or Player, prefName)
+	end)
+end
+
+DatastoreRep.getAllPlayerFlags.OnServerInvoke = function(Player, otherPlayer)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		return getAllPlayerFlags(otherPlayer or Player)
+	end)
+end
+
+DatastoreRep.getPlayerFlag.OnServerInvoke = function(Player, otherPlayer, flagName)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		if not isValidKey(flagName, "Flags") then
+			return nil
+		end
+		return getPlayerFlag(otherPlayer or Player, flagName)
+	end)
+end
+
+DatastoreRep.getPlayerKillCount.OnServerInvoke = function(Player, otherPlayer)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		return getPlayerKillCount(otherPlayer or Player)
+	end)
+end
+
+DatastoreRep.setPlayerPreference.OnServerInvoke = function(Player, prefName, prefValue)
+	return safeInvoke(function()
+		if not isValidKey(prefName, "Preferences") or type(prefValue) ~= "boolean" then
+			warn(`[DataAPI] Invalid preference from {Player.Name}: {prefName} = {prefValue}`)
+			return false
+		end
+		DatastoreRep.PreferenceUpdated:FireClient(Player, prefName, prefValue)
+		return setPlayerPreference(Player, prefName, prefValue)
+	end)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	END
+
+]]
+----------------------------------------------------------------------------------
+
+return Module
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="11">
+        <Properties>
+          <string name="Name">Bootstrapper</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+local Core = require(DataAPI.Core)
+local Manager = require(DataAPI.Manager)
+Core.start()
+Manager.start()
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="12">
+        <Properties>
+          <string name="Name">Core</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE CORE MODULE
+   
+   @module Core
+   @author mezz_inc
+   @description Handles the getting, setting, and updating of Datastores
+   
+   @within ServerScriptService/DataAPI
+   
+   
+   Initialization
+   
+]]
+------------------------------------------------------------------------------------
+
+local Module = {}
+
+--- Name of the module
+local NAME: string = "Core"
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+Module._meta = {
+	name = NAME,
+	version = "1.0.0",
+	description = "Handles the getting, setting, and updating of Datastores",
+}
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Dependant modules
+local Debug = require(DataAPI.Debug)
+local Types = require(DataAPI.Types)
+local Schema = require(DataAPI.Schema)
+local Stores = require(DataAPI.Stores)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+export type AllowedStoreTypes = Types.AllowedStoreTypes
+export type DatastoreType = Types.DataStoreType
+export type Store = Types.Store
+
+export type ValidStores = Stores.ValidStores
+
+type ErrorType = Types.ErrorType
+
+--[[----------------------------------------------------------------------------------
+
+	Debug
+	Mostly wrapper functions for the Debug module
+
+]]
+----------------------------------------------------------------------------------
+
+--- The source name of the module for debugging
+local SOURCE_NAME: string = `[DataAPI.{NAME}]`
+
+--- Prints out a debug message if debug is enabled
+--- @param ... any? a variable number of arguments to prin
+local function debugPrint(...)
+	Debug.debugPrint(SOURCE_NAME, ...)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	Debug.debugWarn(SOURCE_NAME, ...)
+end
+
+------------------------- Module
+
+--[[----------------------------------------------------------------------------------
+
+	Local Functions
+
+]]
+----------------------------------------------------------------------------------
+
+local function yieldToLoad()
+	--- not debug warn as this is for YOU buddy
+	if not Stores.loaded() then
+		warn("Attempt to access the Data API too early - yielding until fully loaded")
+
+		while not Stores.loaded() do
+			task.wait(0.5)
+		end
+	end
+end
+
+--- Returns the store object if it exists, otherwise returns a fallback one
+--- @param storeName string the name of the store to get
+--- @return Store the store object
+local function getStore(storeName: ValidStores | string): Store
+	yieldToLoad()
+
+	local success, result = pcall(function()
+		return Stores.getStore(storeName)
+	end)
+
+	-- Fallback store
+	if not success then
+		-- Most likely occurs if you try and do this too fast when the game starts
+		if #Stores.getAllFlatStores() + #Stores.getAllOrderedStores() == 0 then
+			local total = #Stores.getAllFlatStores() + #Stores.getAllOrderedStores()
+			repeat
+				total = #Stores.getAllFlatStores() + #Stores.getAllOrderedStores()
+				task.wait(3)
+			until total ~= 0
+		end
+
+		debugWarn("StoreMissing", `Store {storeName} is not a loaded store`)
+
+		return {
+			name = storeName,
+			meta = "Invalid",
+			DataStore = nil,
+			__tostring = "Invalid Store",
+			SetEntry = function()
+				return false
+			end,
+			GetEntry = function()
+				return nil
+			end,
+			RemoveEntry = function()
+				return false
+			end,
+			EntryExists = function()
+				return false
+			end,
+		} :: Store
+	end
+
+	return result
+end
+
+--- Returns the store entry of the storename if it exists
+--- @param storeName string the name of the store to get the entry of
+--- @param key any the key to check
+--- @return any? the store entry
+local function getStoreEntry(storeName: ValidStores | string, key: any): any | nil
+	yieldToLoad()
+
+	local store = getStore(storeName) :: Store
+
+	local success, result = pcall(function()
+		return Stores.getEntry(store, key)
+	end)
+
+	if success then
+		return result
+	end
+	return nil
+end
+
+--- Updates the store entry of the storename
+--- @param storeName string the name of the store to get the entry of
+--- @param key any the key to set
+--- @param value any the value to set
+--- @return boolean success if it succeded
+local function updateStoreEntry(storeName: ValidStores | string, key: any, value: any): boolean
+	yieldToLoad()
+
+	local store = getStore(storeName) :: Store
+
+	local success, _ = pcall(function()
+		return Stores.setEntry(store, key, value)
+	end)
+
+	return success
+end
+
+--- Removes the store entry of the storename
+--- @param storeName string the name of the store to get the entry of
+--- @param key any the key to remove
+--- @return boolean success if it succeded
+local function removeStoreEntry(storeName: ValidStores | string, key: any): boolean
+	yieldToLoad()
+
+	local store = getStore(storeName) :: Store
+
+	local success, _ = pcall(function()
+		return Stores.removeEntry(store, key)
+	end)
+
+	return success
+end
+
+--- Checks if the store entry of the storename exists
+--- @param storeName string the name of the store to get the entry of
+--- @param key any the key to check
+--- @return boolean success if it exists
+local function storeEntryExists(storeName: ValidStores | string, key: any): boolean
+	yieldToLoad()
+
+	local store = getStore(storeName) :: Store
+
+	local success, result = pcall(function()
+		return Stores.entryExists(store, key)
+	end)
+
+	if success then
+		return result
+	end
+	return false
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Function Mapping
+
+]]
+----------------------------------------------------------------------------------
+
+Module.getStore = getStore
+Module.getStoreEntry = getStoreEntry
+Module.updateStoreEntry = updateStoreEntry
+Module.removeStoreEntry = removeStoreEntry
+Module.storeEntryExists = storeEntryExists
+Module.getAllFlatStores = Stores.getAllFlatStores
+Module.getAllOrderedStores = Stores.getAllOrderedStores
+Module.getAllColdStores = Stores.getAllColdStores
+Module.getTableEntry = Stores.getTableEntry
+Module.setTableEntry = Stores.setTableEntry
+Module.getNestedEntry = Stores.getNestedEntry
+Module.setNestedEntry = Stores.setNestedEntry
+
+--[[----------------------------------------------------------------------------------
+
+	Start & Test Features
+
+]]
+----------------------------------------------------------------------------------
+
+--- Initalization function
+local function start()
+	Schema.start()
+	Stores.load()
+	debugPrint("Module is ready")
+end
+
+--- Runs a developer test on the module
+local function test()
+	debugPrint("Getting prefs")
+	local coolStore = getStore("Preferences") :: Store
+
+	print(coolStore)
+
+	debugPrint("Getting a value")
+	local succes, res = coolStore:set()
+	if not succes then
+		print("oopsie poopise:", res)
+	end
+end
+
+--[[----------------------------------------------------------------------------------
+
+	END
+
+]]
+----------------------------------------------------------------------------------
+
+Module.isLoaded = function()
+	return Stores.loaded()
+end
+
+--- Calling module.start() will start the module
+--- Calling module.test() will test a function of the module
+Module.start = start
+Module.test = test
+
+return Module
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="13">
+        <Properties>
+          <string name="Name">Debug</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE DEBUG MODULE
+   
+   @module Debug
+   @author mezz_inc
+   @description The logging and debugging module for the datastore system
+   
+   @within ServerScriptService/DataAPI
+]]
+------------------------------------------------------------------------------------
+
+local Debug = {}
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+--- Dependant modules
+local Types = require(DataAPI.Types)
+local ErrorTypes = require(DataAPI.ErrorTypes)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+export type ErrorType = Types.ErrorType
+export type DatastoreError = Types.DatastoreError
+
+--[[----------------------------------------------------------------------------------
+
+	Variables
+
+]]
+----------------------------------------------------------------------------------
+
+--- Whether or not the script will print into the output
+--- @type boolean whether it will print
+local DEBUG_ENABLED: boolean = false
+
+--[[----------------------------------------------------------------------------------
+
+	Utility Functions
+
+]]
+----------------------------------------------------------------------------------
+
+--- Concats a list of arguments into a string. Spaces out each argument with one space
+--- @return string the concatted string
+local function createOutputFromArgs(...): string
+	local args = { ... }
+	for i = 1, #args do
+		args[i] = tostring(args[i])
+	end
+	return table.concat(args, " ")
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Log Functions
+
+]]
+
+--[[----------------------------------------------------------------------------------
+
+	Print Functions
+
+]]
+----------------------------------------------------------------------------------
+
+--- Prints out statement(s) to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugPrint(...)
+	if not DEBUG_ENABLED then
+		return
+	end
+	local output = createOutputFromArgs(...)
+	print(output)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	if not DEBUG_ENABLED then
+		return
+	end
+	local output = createOutputFromArgs(...)
+	warn(output)
+end
+
+--- Raise an error to the output.
+--- @param ... string? a variable number of strings/types to print
+local function debugError(...)
+	if not DEBUG_ENABLED then
+		return
+	end
+	local output = createOutputFromArgs(...)
+	error(output, math.huge)
+end
+
+--- Creates a debug error object out of the provided params
+--- @param sourceName string the name of the module raising the error
+--- @param errorType ErrorType the type of error that was raised
+--- @param ... string? the message text to add to the error
+local function debugErrorType(sourceName: string, errorType: ErrorType, ...)
+	local message = createOutputFromArgs(...)
+	local newError = ErrorTypes.new(errorType, message) :: DatastoreError
+	debugError(sourceName, newError)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Function Mapper
+
+]]
+----------------------------------------------------------------------------------
+
+Debug.debugPrint = debugPrint
+Debug.debugWarn = debugWarn
+Debug.debugError = debugError
+Debug.debugErrorType = debugErrorType
+
+return Debug
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="14">
+        <Properties>
+          <string name="Name">ErrorTypes</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE ERROR TYPE MODULE
+   
+   @module ErrorTypes
+   @author mezz_inc
+   @description The error-creation types for the Datastore module.
+   
+   @within ServerScriptService/DataAPI
+]]
+------------------------------------------------------------------------------------
+
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+local Types = require(DataAPI.Types)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+export type DatastoreError = Types.DatastoreError
+export type ErrorType = Types.ErrorType
+
+--[[----------------------------------------------------------------------------------
+
+	Error Instance
+
+]]
+----------------------------------------------------------------------------------
+
+local ErrorTypes = {}
+ErrorTypes.__index = ErrorTypes
+
+--- Create a new error type-object
+--- @param type ErrorType The type of error
+--- @param message string The error message
+function ErrorTypes.new(type: ErrorType, message: string): DatastoreError
+	local self = setmetatable({}, ErrorTypes)
+	self.type = type
+	self.message = message
+	return self :: DatastoreError
+end
+
+--- Returns the string-formatted verrsion of the error object
+--- @param self DatastoreError The error object
+function ErrorTypes:__tostring(): string
+	return `{self.type} Error | {self.message}`
+end
+
+return ErrorTypes
+
+--[[----------------------------------------------------------------------------------
+]]
+----------------------------------------------------------------------------------
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="15">
+        <Properties>
+          <string name="Name">Manager</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE P-MANAGER
+   
+   @module MANAGER
+   @author mezz_inc
+   @description Handles saving, and creation of player data on join & leave
+   
+   @within ServerScriptService/DataAPI
+   
+   
+   Initialization
+   
+]]
+------------------------------------------------------------------------------------
+
+local Module = {}
+
+--- Name of the module
+local NAME: string = "Manager"
+
+--- We are not getting the datastore for actual use, just for quickly migrating old data
+local DataStoreService = game:GetService("DataStoreService")
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DatastoreRem = ReplicatedStorage:WaitForChild("Datastore")
+local Players = game:GetService("Players")
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+--- Old Datastores
+
+local VERSION = "3.0v"
+
+-- Datastores
+local oldPlayerStatsDataStore = DataStoreService:GetDataStore("Data" .. VERSION, "Stats")
+
+local oldPlayerPreferencesDataStore = DataStoreService:GetDataStore("Data" .. VERSION, "Preferences")
+
+Module._meta = {
+	name = NAME,
+	version = "1.0.0",
+	description = "Handles player data instancing and saving",
+}
+
+--[[----------------------------------------------------------------------------------
+
+	Variables
+
+]]
+----------------------------------------------------------------------------------
+
+--- The max amount of times to attempt to save a players data, if it fails
+local SAVE_ATTEMPTS: number = 5
+local LOAD_ATTEMPTS: number = 8
+
+--- A list of IDs whose currently in the process of being loaded
+--- Released after data folder is created
+local loadQueued: { number } = {}
+
+--- A list of number values that get copied to the player's leaderstats
+--- when changed
+local replicatedLeaderStatValues: { string } = { "Kills", "Deaths", "Level", "Credits" }
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Dependant modules
+local Debug = require(DataAPI.Debug)
+local Types = require(DataAPI.Types)
+local Schema = require(DataAPI.Schema)
+local Core = require(DataAPI.Core)
+local API = require(DataAPI.API)
+
+local ErrorModule = require(DataAPI.ErrorTypes)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+type ErrorType = Types.ErrorType
+type Store = Types.Store
+type AllowedStoreTypes = Types.AllowedStoreTypes
+type ValidStores = Types.ValidStores
+type ValidDatastoreEntryTypes = Types.ValidDatastoreEntryTypes
+
+--[[----------------------------------------------------------------------------------
+
+	Debug
+	Mostly wrapper functions for the Debug module
+
+]]
+----------------------------------------------------------------------------------
+
+--- The source name of the module for debugging
+local SOURCE_NAME: string = `[DataAPI.{NAME}]`
+
+--- Prints out a debug message if debug is enabled
+--- @param ... any? a variable number of arguments to prin
+local function debugPrint(...)
+	Debug.debugPrint(SOURCE_NAME, ...)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	Debug.debugWarn(SOURCE_NAME, ...)
+end
+
+--- Raise an error to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugError(...)
+	Debug.debugError(SOURCE_NAME, ...)
+end
+
+------------------------- Module
+
+--[[----------------------------------------------------------------------------------
+
+	Local Functions
+
+]]
+----------------------------------------------------------------------------------
+
+--- Whether or not an entry exists for playerId
+--- @param playerId number the id of the player to check
+--- @return boolean exists whether the data exists
+local function playerDataExists(playerId: number): boolean
+	return Core.storeEntryExists("PlayerInfo", playerId)
+end
+
+--- Sets up the player's datastore entries
+--- @param playerId number the id of the player to setup
+local function setupPlayerData(playerId: number)
+	local ORDERED_STORES = Core.getAllOrderedStores() :: { Store }
+	local FLAT_STORES = Core.getAllFlatStores() :: { Store }
+	local COLD_STORES = Core.getAllColdStores() :: { Store }
+
+	local function ensureStoreEntry(store: Store, defaultValue: any)
+		if Core.storeEntryExists(store.name, playerId) then
+			return
+		end
+
+		Core.updateStoreEntry(store.name, playerId, defaultValue)
+	end
+
+	--- Set all numeral entries to zero
+	for _, store: Store in ipairs(ORDERED_STORES) do
+		ensureStoreEntry(store, 0)
+	end
+
+	for _, store: Store in ipairs(FLAT_STORES) do
+		local storeName = store.name
+		local scheme = Schema.getSchemaForStore(storeName) :: { [string]: ValidDatastoreEntryTypes }
+		ensureStoreEntry(store, scheme)
+	end
+
+	for _, store: Store in ipairs(COLD_STORES) do
+		local storeName = store.name
+		local scheme = Schema.getSchemaForStore(storeName)
+		ensureStoreEntry(store, scheme)
+	end
+
+	-- Ensure inventory schema/version migrations run during load, even before gameplay systems query inventory.
+	API.getAllPlayerInventory(playerId)
+end
+
+--- Attempt to update all tables & ordered data stores
+--- @param playerId number the id of the player to update
+--- @return boolean success whether or not it saved successfully
+local function attemptDataSave(playerId: number, playerDataFolder: Folder): boolean
+	--- Get all the created stores so far
+
+	--if true then
+	--	if math.random(1,5) > 1 then
+	--		return false
+	--	end
+	--end
+
+	local flatDataFolder = playerDataFolder:WaitForChild("FlatData") :: Folder
+	local orderedDataFolder = playerDataFolder:WaitForChild("OrderedData") :: Folder
+
+	if not flatDataFolder or not orderedDataFolder then
+		debugWarn("Malformed data folder - can't save")
+		return false
+	end
+
+	for _, folder: Folder in ipairs(flatDataFolder:GetChildren()) do
+		--- Gete data table from the instances
+		local storeName = folder.Name
+		local values = folder:GetChildren()
+		local dataMap = Schema.instancesToTable(values)
+
+		local store = Core.getStore(storeName) :: Store
+		debugPrint("Saving store " .. store.name)
+
+		--- Datastore accessor
+		local success, result = store:SetEntry(playerId, dataMap)
+		if not success then
+			debugPrint("Could not save data store", storeName, "because", result)
+			return false
+		end
+	end
+
+	--- Save the ordered one
+	for _, numberValue: NumberValue in ipairs(orderedDataFolder:GetChildren()) do
+		local storeName = numberValue.Name
+		local value = numberValue.Value
+
+		local store = Core.getStore(storeName) :: Store
+
+		debugPrint("Saving store " .. store.name)
+
+		--- Datastore accessor
+		local success, result = store:SetEntry(playerId, value)
+		if not success then
+			debugPrint("Could not save data store", storeName, "because", result)
+			return false
+		end
+	end
+
+	return true
+end
+
+--- Attempts (several times if failure) to save all player data
+--- @param Player Player the player to save data for
+local function savePlayerData(Player: Player)
+	local userId = Player.UserId
+	local data = Player:FindFirstChild("Data") :: Folder
+
+	if not data then
+		debugWarn("Player had no data folder to save in the first place - coward")
+		return
+	end
+
+	--- If for some reason the player dissapears we won't forget what their data is, we clean it later
+	local playerDataFolder = data:Clone()
+
+	debugPrint("Saving player data " .. tostring(Player) .. " - remembered their data folder")
+
+	task.spawn(function()
+		local success = false
+		for attempt = 1, SAVE_ATTEMPTS do
+			debugPrint("Attempt", attempt)
+			if attemptDataSave(userId, playerDataFolder) then
+				debugPrint(`Successfully saved data for {Player.Name}`)
+				success = true
+				break
+			end
+
+			local waitTime = math.pow(2, attempt) * 0.2 -- 0.2s, 0.4s, 0.8s, etc.
+			debugWarn(`Attempt {attempt} failed to save data for {Player.Name}, retrying in {waitTime} seconds`)
+			task.wait(waitTime)
+		end
+
+		if success then
+			return
+		end
+		debugError(`All attempts failed to save data for {Player.Name}`)
+		playerDataFolder:Destroy() -- sound scary but dont panic
+	end)
+end
+
+--- Attempts to read and insert the values from the player's datastores
+--- @userId number the user's id
+local function attemptLoadPlayerData(userId: number)
+	--- Check first to make sure the player has data to begin with
+	setupPlayerData(userId)
+
+	local Player = Players:GetPlayerByUserId(userId)
+	if not Player then
+		return false
+	end
+
+	--- Make the overhead data holder for all the instances
+	local DataFolder = Instance.new("Folder", Player)
+	DataFolder.Name = "Data"
+
+	--- Get all the created stores so far
+	local ORDERED_STORES = Core.getAllOrderedStores() :: { Store }
+	local FLAT_STORES = Core.getAllFlatStores() :: { Store }
+
+	--- Create the holder for table-like data stores
+	local flatFolder = Instance.new("Folder", DataFolder)
+	flatFolder.Name = "FlatData"
+
+	--- Create the holder for number value stores
+	local orderedDataFolder = Instance.new("Folder", DataFolder)
+	orderedDataFolder.Name = "OrderedData"
+
+	--- Make basic number values
+	for _, store: Store in ipairs(ORDERED_STORES) do
+		local name = store.name
+
+		debugPrint("Loading ordered store", name)
+		local success, result = store:GetEntry(userId)
+		if not success then
+			debugWarn(`Unable to load the store {name}! {result}`)
+			return false
+		end
+
+		local newIntegerValue = Instance.new("NumberValue", orderedDataFolder)
+		newIntegerValue.Name = name
+		newIntegerValue.Value = result
+	end
+
+	--- Load each table-based store
+	for _, store: Store in ipairs(FLAT_STORES) do
+		local name = store.name
+
+		debugPrint("Loading flat store", name)
+
+		local entrySucces, result = store:GetEntry(userId)
+		if not entrySucces then
+			debugWarn(`Unable to load the store {name}! {result}`)
+			return false
+		end
+		-- result result is the players key pair
+		local scheme = Schema.getSchemaForStore(name)
+
+		--- Construct a template
+		local schemeFolder: Folder
+		local success, resultFolder = pcall(function()
+			schemeFolder = Schema.constructFolderFromEntryTable(name, scheme) :: Folder
+		end)
+
+		if not success then
+			debugWarn(`Unable to create the folder for the store {name}! {resultFolder}`)
+			continue
+		end
+
+		--- Had to implement a fix for adding values later on.
+
+		--- For each value in the scheme,
+		--- check if the player has the same key as the name
+		--- That means they HAVE saved data for it, so let's copy it over
+		local values = schemeFolder:GetChildren()
+		for _, value in ipairs(values) do
+			local valueName = value.Name
+
+			--- An entry exists for this name
+			if result[valueName] ~= nil then
+				value.Value = result[valueName]
+			else
+				debugWarn("It looks like player didn't have " .. valueName .. " - well, now they do!")
+			end
+		end
+
+		--- Any other name will be ignore
+		schemeFolder.Parent = flatFolder
+	end
+	debugPrint("Instanced all player data successfully")
+	return true
+end
+
+local function migrateOldData(Player: Player)
+	local success, result = pcall(function()
+		return oldPlayerStatsDataStore:GetAsync("Player_" .. Player.UserId)
+	end)
+
+	if not success or not result then
+		debugPrint("Player " .. Player.Name .. " likely had no old data to catch")
+		return
+	end
+
+	debugPrint("Found old data for " .. Player.Name .. ", attempting data migration")
+
+	local dataList = {
+		["Kills"] = result["Kills"],
+		["Deaths"] = result["Deaths"],
+		["Experience"] = result["Experience"],
+		["Level"] = result["Level"],
+		["Completion"] = result["Completion"],
+	}
+
+	for key, value in pairs(dataList) do
+		if value ~= nil then
+			local ok = API.setPlayerInfo(Player, key, value)
+			if not ok then
+				debugWarn(`Could not update player info {key} to {value} during migration!`)
+			end
+		end
+	end
+
+	local prefSuccess, prefResult = pcall(function()
+		return oldPlayerPreferencesDataStore:GetAsync("Player_" .. Player.UserId)
+	end)
+
+	if not prefSuccess or not prefResult then
+		debugWarn("No old preferences found for " .. Player.Name)
+		return
+	end
+
+	local prefList = {
+		["SunRays"] = prefResult["SunRays"],
+		["CameraSway"] = prefResult["CameraSway"],
+		["Materials"] = prefResult["Materials"],
+		["DoomMusic"] = prefResult["Shadows"],
+		["ShowDamageAmount"] = prefResult["ShowDamageAmount"],
+		["HealthBars"] = prefResult["ShowHealthbars"],
+		["DepthOfField"] = prefResult["DepthOfField"],
+		["KillFeed"] = prefResult["KillFeed"],
+		["Shadows"] = prefResult["Shadows"],
+	}
+
+	for key, value in pairs(prefList) do
+		if value ~= nil then
+			local ok = API.setPlayerPreference(Player, key, value)
+			if not ok then
+				debugWarn(`Could not update preference {key} to {value} during migration!`)
+			end
+		end
+	end
+end
+
+--- Setups & creates a clone of certain stats for a player
+--- and displays their leaderstats
+--- @param Player Player the player to add stats to
+--- @param dataFolder Folder the player's fully loaded datafolder
+local function setupPlayerLeaderStats(Player: Player, dataFolder: Folder)
+	local existingStats = Player:FindFirstChild("leaderstats")
+	if existingStats then
+		debugWarn("Er... why do they already have leaderstats 😨")
+		return
+	end
+
+	local newStats = Instance.new("Folder", Player)
+	newStats.Name = "leaderstats"
+
+	for _, leaderStatValue in ipairs(replicatedLeaderStatValues) do
+		local statValue = dataFolder:FindFirstChild(leaderStatValue, true)
+		if not statValue or not statValue:IsA("NumberValue") then
+			debugWarn(`{statValue} must be an existing number value in the player's data folder`)
+			continue
+		end
+
+		debugPrint("Replicated value", leaderStatValue, "to leaderstat")
+
+		local newNumberValue = Instance.new("NumberValue", newStats)
+		newNumberValue.Name = leaderStatValue
+		newNumberValue.Value = statValue.Value
+		local updateConnection: RBXScriptConnection
+
+		--- Whenever the player's data is updated in-server
+		updateConnection = statValue.Changed:Connect(function()
+			if not statValue or not newNumberValue then
+				updateConnection:Disconnect()
+				return
+			end
+
+			newNumberValue.Value = statValue.Value
+		end)
+	end
+end
+
+--- Loads the data folder for the player in the server
+--- @param Player Player the player to load the data for
+local function loadPlayerData(Player: Player)
+	-- If you have a data folder you're already loaded
+	if Player:FindFirstChild("Data") then
+		return
+	end
+
+	if table.find(loadQueued, Player.UserId) then
+		return
+	end
+
+	table.insert(loadQueued, Player.UserId)
+
+	if not Core.isLoaded() then
+		print("Yielding for Core to load before attempting to create data")
+		while not Core.isLoaded() do
+			task.wait(0.5)
+		end
+	end
+
+	local userId = Player.UserId
+
+	task.spawn(function()
+		local success = false
+		for attempt = 1, LOAD_ATTEMPTS do
+			--- i mean what do you want me to do you left before we even got started
+			if not Player then
+				success = true
+				break
+			end
+
+			debugPrint("Attempt", attempt)
+
+			if attemptLoadPlayerData(userId) then
+				debugPrint(`Successfully loaded data for {Player.Name}`)
+				DatastoreRem.DataLoaded:FireClient(Player)
+				success = true
+				break
+			end
+
+			local Data = Player:FindFirstChild("Data")
+			if Data then
+				Data:Destroy()
+			end
+
+			local waitTime = math.pow(2, attempt) * 0.2 -- 0.2s, 0.4s, 0.8s, etc.
+			debugWarn(`Attempt {attempt} failed to load data for {Player.Name}, retrying in {waitTime} seconds`)
+			task.wait(waitTime)
+		end
+
+		if table.find(loadQueued, Player.UserId) then
+			table.remove(loadQueued, table.find(loadQueued, Player.UserId))
+		end
+
+		if success then
+			if not Player then
+				return
+			end
+
+			local data = Player:FindFirstChild("Data")
+			if not data then
+				return
+			end
+
+			--- Setup leader stats
+			if Player then
+				setupPlayerLeaderStats(Player, data)
+			end
+
+			--- Check if not migrated yet
+			if not API.getPlayerFlag(Player, "OldDataMigrated") then
+				-- This won't do anything unless they have old data in the first place
+				migrateOldData(Player)
+
+				--- Prevents this from tripping later
+				API.setPlayerFlag(Player, "OldDataMigrated", true)
+				warn("Migrated data")
+			end
+
+			return
+		end
+		Player:Kick(
+			"For some reason, the datastore service left me on read! probably just means its down OR the games too popular. hopefully the later, try again later (your data is probably fine just in a dusty box)"
+		)
+		debugError(`All attempts to load data for {Player.Name} failed`)
+	end)
+end
+
+local function playerLeft(Player: Player)
+	savePlayerData(Player)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Start & Test Features
+
+]]
+----------------------------------------------------------------------------------
+
+--- Initalization function
+local function start()
+	debugPrint("Module is ready")
+end
+
+--- Runs a developer test on the module
+local function test()
+	debugWarn("Something has gone awry!")
+
+	task.wait(2)
+
+	--- do something risky
+	local success, result = pcall(function()
+		error(ErrorModule.new("GetFailure", "gaslight vibes"))
+	end)
+
+	if not success and getmetatable(result) == ErrorModule then
+		debugError("Looks like one of ours!", result)
+	end
+end
+
+--[[----------------------------------------------------------------------------------
+
+	CONNECTIONS
+
+]]
+----------------------------------------------------------------------------------
+
+local DatastoreEvents = ReplicatedStorage:WaitForChild("Datastore")
+local LoadClientData = DatastoreEvents:WaitForChild("LoadClientData")
+LoadClientData.OnServerEvent:Connect(loadPlayerData)
+
+--- Save all player data
+game:BindToClose(function()
+	for _, Player in Players:GetPlayers() do
+		savePlayerData(Player)
+	end
+end)
+
+Players.PlayerRemoving:Connect(playerLeft)
+
+--[[----------------------------------------------------------------------------------
+
+	END
+
+]]
+----------------------------------------------------------------------------------
+
+--- Calling module.start() will start the module
+--- Calling module.test() will test a function of the module
+Module.start = start
+Module.test = test
+
+return Module
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="16">
+        <Properties>
+          <string name="Name">Schema</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE SCHEMA MODULE
+   
+   @module Scheme
+   @author mezz_inc
+   @description Handles the layouts of the data stores values
+   
+   @within ServerScriptService/DataAPI
+   
+   
+   Initialization
+   
+]]
+------------------------------------------------------------------------------------
+
+local Module = {}
+
+--- Name of the module
+local NAME: string = "Schema"
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+local SchemeLocation = script.Parent.Schemes
+
+Module._meta = {
+	name = NAME,
+	version = "1.0.0",
+	description = "Data-layouts for specific datastores",
+}
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Dependant modules
+local Debug = require(DataAPI.Debug)
+local ErrorModule = require(DataAPI.ErrorTypes)
+local Types = require(DataAPI.Types)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+type ErrorType = Types.ErrorType
+
+type ValidStores = Types.ValidStores
+
+type ValidInstanceValues = Types.ValidInstanceValues
+
+type ValidDatastoreEntryTypes = Types.ValidDatastoreEntryTypes
+
+type ValidDatastoreValue = Types.ValidDatastoreValue
+
+--[[----------------------------------------------------------------------------------
+
+	Debug
+	Mostly wrapper functions for the Debug module
+
+]]
+----------------------------------------------------------------------------------
+
+--- The source name of the module for debugging
+local SOURCE_NAME: string = `[DataAPI.{NAME}]`
+
+--- Prints out a debug message if debug is enabled
+--- @param ... any? a variable number of arguments to prin
+local function debugPrint(...)
+	Debug.debugPrint(SOURCE_NAME, ...)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	Debug.debugWarn(SOURCE_NAME, ...)
+end
+
+------------------------- Module
+
+local validInstanceTypes: { string } = { "StringValue", "BoolValue", "NumberValue" }
+
+--[[----------------------------------------------------------------------------------
+
+	Local Functions
+
+]]
+----------------------------------------------------------------------------------
+
+--- Returns whether or not a given scheme exists
+--- @param dataStoreName string the name of the store to check
+--- @return boolean exists whether it exists
+local function schemeExists(dataStoreName: ValidStores | string): boolean
+	return SchemeLocation:FindFirstChild(dataStoreName) ~= nil
+end
+
+--- Returns the schema for a given store name
+--- @param dataStoreName string the name of the store to get the schema of
+--- @return table schema the schema of the store
+local function getSchemaForStore(dataStoreName: ValidStores | string): { [any]: any }
+	local scheme = SchemeLocation:FindFirstChild(dataStoreName) :: Instance?
+	if not scheme then
+		debugWarn(`No scheme available for "{dataStoreName}" returning empty table!`)
+		return {}
+	end
+
+	local schemeTable = require(scheme) :: { [any]: any }
+	return schemeTable
+end
+
+--- Returns whether the store should be mirrored into the player's data folder
+--- @param dataStoreName string the name of the store to inspect
+--- @return boolean served whether the store is hot-served
+local function isServedStore(dataStoreName: ValidStores | string): boolean
+	local scheme = getSchemaForStore(dataStoreName)
+	if scheme._served == nil then
+		return true
+	end
+	return scheme._served == true
+end
+
+--- Creates a list of instance values based on an array of data and returns the list
+--- Returns dynamic value instances based on the value of inputTable[x]
+--- Assumes the key is a string for the name of the value, is a string, number, or bool value-wise
+--- @param inputTable {[string]: any} the table to create the instances from
+--- @return {ValidInstanceValues} instanceList the list of instances created
+local function tableToInstances(
+	inputTable: { [string]: ValidDatastoreValue },
+	isServed: boolean?
+): { ValidInstanceValues }
+	local typeToInstanceType: { [string]: string } = {
+		["string"] = "StringValue",
+		["number"] = "NumberValue",
+		["boolean"] = "BoolValue",
+	}
+
+	local instanceList: { ValidInstanceValues } = {}
+
+	for key, value in pairs(inputTable) do
+		if key == "_served" then
+			continue
+		end
+
+		local valueType = type(value) :: string
+
+		if valueType == "table" then
+			if isServed then
+				error(ErrorModule.new("EntryFailure", "Hot stores only permit simple entries"))
+			end
+			debugWarn("Unable to create instance value for", key .. ", tables are not supported in the data folder")
+			continue
+		end
+
+		if typeToInstanceType[valueType] == nil then
+			debugWarn("Unable to create instance value for", key .. ", must be a string, number, or bool value")
+			continue
+		end
+
+		local instanceName = typeToInstanceType[valueType] :: string
+		local newInstanceValue = Instance.new(instanceName) :: ValidInstanceValues
+		newInstanceValue.Name = key
+
+		local success, _ = pcall(function()
+			newInstanceValue.Value = value
+		end)
+
+		if not success then
+			debugPrint("Value mismatch:", key, " cannot be made value", value)
+		end
+
+		table.insert(instanceList, newInstanceValue)
+	end
+
+	return instanceList
+end
+
+--- Creates a list from instance values based on their name, and current value
+--- Returns a key-pair instance of InstanceName = Value
+--- Assumes all Instances are either a StringValue, NumberValue, or BoolValue
+--- @param instanceList {ValidInstanceValues} the list of instances to create the table from
+--- @return {[string]: any} table the table created from the instances
+local function instancesToTable(
+	instanceList: { ValidInstanceValues | Instance }
+): { [string]: ValidDatastoreEntryTypes }
+	local newTable = {}
+	for _, instance in ipairs(instanceList) do
+		local instanceType = instance.ClassName :: ValidInstanceValues
+		local instanceName = instance.Name :: string
+
+		if not table.find(validInstanceTypes, instanceType) then
+			debugWarn("Attempt to store a non-valid instance type:", instanceType)
+			continue
+		end
+
+		local value = instance.Value
+		newTable[instanceName] = value
+	end
+
+	return newTable
+end
+
+--- Returns a folder of values based on the input table, and the store name
+--- By default has no parent
+--- @param storeName string the name of the store to create the folder from
+--- @param EntryTable {[string]: any} the table to create the folder from
+--- @return Folder folder the folder created from the table
+local function constructFolderFromEntryTable(storeName: string, EntryTable: { [string]: ValidDatastoreValue }): Folder
+	local newFolder = Instance.new("Folder")
+	newFolder.Name = storeName
+
+	--- Create the instances
+	local instances = tableToInstances(EntryTable, true) :: { ValidInstanceValues }
+	for _, instance in ipairs(instances) do
+		instance.Parent = newFolder
+	end
+
+	return newFolder :: Folder
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Function Mappers
+
+]]
+----------------------------------------------------------------------------------
+
+Module.schemeExists = schemeExists
+Module.getSchemaForStore = getSchemaForStore
+Module.isServedStore = isServedStore
+Module.tableToInstances = tableToInstances
+Module.instancesToTable = instancesToTable
+Module.constructFolderFromEntryTable = constructFolderFromEntryTable
+
+--[[----------------------------------------------------------------------------------
+
+	Start & Test Features
+
+]]
+----------------------------------------------------------------------------------
+
+--- Initalization function
+local function start() end
+
+--- Runs a developer test on the module
+local function test() end
+
+--[[----------------------------------------------------------------------------------
+
+	END
+
+]]
+----------------------------------------------------------------------------------
+
+--- Calling module.start() will start the module
+--- Calling module.test() will test a function of the module
+Module.start = start
+Module.test = test
+
+return Module
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="17">
+        <Properties>
+          <string name="Name">Schemes</string>
+        </Properties>
+        <Item class="ModuleScript" referent="18">
+          <Properties>
+            <string name="Name">Flags</string>
+            <string name="Source"><![CDATA[return {
+	_version = "1.1",
+	_served = true,
+	Played = false,
+	OldDataMigrated = false,
+	IsVeteran = false,
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="19">
+          <Properties>
+            <string name="Name">Inventory</string>
+            <string name="Source"><![CDATA[return {
+	_version = "1.0.1",
+	_served = false,
+	OwnedItems = {},
+	Loadouts = {
+		Default = {
+			Guns = {},
+			Melees = {},
+			Armor = {},
+		},
+	},
+	ActiveLoadout = "Default",
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="20">
+          <Properties>
+            <string name="Name">PlayerInfo</string>
+            <string name="Source"><![CDATA[return {
+	_version = "1.1.0",
+	_served = true,
+	Kills = 0,
+	Deaths = 0,
+	Level = 0,
+	Experience = 0,
+	Completion = 0,
+	Credits = 0,
+	Rank = "None",
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="21">
+          <Properties>
+            <string name="Name">Preferences</string>
+            <string name="Source"><![CDATA[return {
+	_version = "1.1.0",
+	_served = true,
+	SunRays = true,
+	CameraSway = true,
+	Materials = true,
+	DoomMusic = true,
+	ShowDamageAmount = true,
+	HealthBars = true,
+	DepthOfField = true,
+	KillFeed = true,
+	Shadows = true,
+	LevelBar = true,
+	ShowNamePlate = false,
+}
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="ModuleScript" referent="22">
+        <Properties>
+          <string name="Name">Stores</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   STORES MODULES
+   
+   @module Stores
+   @author mezz_inc
+   @description Holds all the active datastores for the place
+   
+   @within ServerScriptService/DataAPI/Core
+      
+]]
+------------------------------------------------------------------------------------
+
+local Module = {}
+
+--- Name of the module
+local NAME: string = "Stores"
+
+--- Required services
+local DatastoreService = game:GetService("DataStoreService")
+
+--- Access the Data API folder
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataAPI = ServerScriptService:WaitForChild("DataAPI")
+
+--- The version of the datastore. Change this to... reset everything
+local DATASTORE_VERSION = "-0.1v"
+
+Module._meta = {
+	name = NAME,
+	version = "1.0.0",
+	description = "Holds all the game's active datastores",
+}
+
+local LOADED: boolean = false
+
+--[[----------------------------------------------------------------------------------
+
+	Modules
+
+]]
+----------------------------------------------------------------------------------
+
+--- Dependant modules
+local Debug = require(DataAPI.Debug)
+local Types = require(DataAPI.Types)
+local ErrorModule = require(DataAPI.ErrorTypes)
+
+--[[----------------------------------------------------------------------------------
+
+	Types
+
+]]
+----------------------------------------------------------------------------------
+
+export type AllowedStoreTypes = Types.AllowedStoreTypes
+export type DatastoreType = Types.DataStoreType
+export type ValidDatastoreEntryTypes = Types.ValidDatastoreEntryTypes
+export type ValidDatastoreKey = Types.ValidDatastoreKey
+export type ValidDatastoreValue = Types.ValidDatastoreValue
+export type Store = Types.Store
+type ErrorType = Types.ErrorType
+
+--[[----------------------------------------------------------------------------------
+
+	Debug
+	Mostly wrapper functions for the Debug module
+
+]]
+----------------------------------------------------------------------------------
+
+--- The source name of the module for debugging
+local SOURCE_NAME: string = `[DataAPI.Core.{NAME}]`
+
+--- Prints out a debug message if debug is enabled
+--- @param ... any? a variable number of arguments to prin
+local function debugPrint(...)
+	Debug.debugPrint(SOURCE_NAME, ...)
+end
+
+--- Warn a statement to the output
+--- @param ... string? a variable number of strings/types to print
+local function debugWarn(...)
+	Debug.debugWarn(SOURCE_NAME, ...)
+end
+
+--- Creates a debug error object out of the provided params
+--- @param errorType ErrorType the type of error that was raised
+--- @param ... string? the message text to add to the error
+local function debugErrorType(errorType: ErrorType, ...)
+	Debug.debugErrorType(SOURCE_NAME, errorType, ...)
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Datastore Entry
+	If you want to create a new datastore, please update these values
+
+]]
+----------------------------------------------------------------------------------
+
+--- Info associated with pre-created datastores (Optional, but highly encouraged)
+--- You can find this with
+--- @type {DatastoreInfo} datastoreInfo
+local DEFAULT_META_INFO = {
+	["KillCount"] = "The amount of kills a player has total",
+	["PlayerInfo"] = "Basic player stats (kills, deaths)",
+	["Preferences"] = "Player settings",
+	["Flags"] = "Certain player quirks T/F",
+	["Inventory"] = "Owned items, loadouts, and player inventory state",
+}
+
+--- Refer to the type module to help developers see what stores are available currently
+--- This is optional, but helps the intellisense for exterior scripts
+export type ValidStores = Types.ValidStores
+
+--- All the ordered numeral data stores in the game that should created
+--- @type {string} storeName
+local ORDERED_STORE_NAMES: { string } = {
+	"KillCount",
+}
+
+--- All the normal/data varied data stores that should be created
+--- @type {string} storeName
+local FLAT_STORE_NAMES: { string } = {
+	"PlayerInfo",
+	"Flags",
+	"Preferences",
+}
+
+--- Cold stores are persisted only through datastore calls and are never mirrored into player folders.
+local COLD_STORE_NAMES: { string } = {
+	"Inventory",
+}
+
+----- IMPORTANT NOTE   IMPORTANT NOTE    IMPORTANT NOTE   IMPORTANT NOTE
+
+----- IF USING FLAT STORE:
+----- Once you added one above, please look into DataAPI > Schema and clone a module,
+----- then arrange the data how you want it. Thanks!
+
+--[[----------------------------------------------------------------------------------
+
+	Datastores
+
+]]
+----------------------------------------------------------------------------------
+
+--- Valid datastore types as a list
+--- @type {string} DatastoreType
+local DatastoreTypes = { "DataStore", "OrderedDataStore" }
+
+local DATA_STORES: {
+	[DatastoreType]: { [string]: Store },
+} = {}
+
+--[[----------------------------------------------------------------------------------
+
+	Store Information & Creation
+
+]]
+----------------------------------------------------------------------------------
+
+--- Returns the meta info for a given store name
+--- @param storeName string the name of the store to get info on
+--- @return string the meta info for the store
+local function getStoreMetaInfo(storeName: ValidStores | string): string
+	if DEFAULT_META_INFO[storeName] == nil then
+		return "No meta-info available"
+	end
+	return DEFAULT_META_INFO[storeName]
+end
+
+--- Returns the table value stored at a specific key in a datastore entry.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param tableKey ValidDatastoreKey the key inside the table value
+--- @return ValidDatastoreValue? the stored table value
+--- Use this for single-level table values only.
+--- For deeper paths, use GetNestedEntry.
+--- Returns the store object with the given name and type if it exists. Errors if the store is missing
+--- @param name string the name of the store
+--- @param storeType DatastoreType the type of store to get, if available, otherwise manually searches
+--- @return Store store the store object if it exists, or errors "StoreMissing"
+local function getStore(name: ValidStores | string, storeType: DatastoreType | nil): Store | nil
+	if storeType then
+		--- Attempt get the info via key
+		if DATA_STORES[storeType][name] == nil then
+			error(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
+			return nil
+		end
+
+		local dataInfo = DATA_STORES[storeType][name] :: Store?
+		return dataInfo
+	end
+
+	-- Manual search
+	for datastoreType, nameList in pairs(DATA_STORES) do
+		for dataName: string, store: Store in pairs(nameList) do
+			if dataName == name then
+				return store
+			end
+		end
+	end
+
+	debugWarn(ErrorModule.new("StoreMissing", `Could not find the Store with the name {name}`))
+
+	return nil
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Getting/setting data
+
+]]
+----------------------------------------------------------------------------------
+
+--- Returns whether or not "key" exists in data store
+--- @param dataStore DataStore the datastore to check
+--- @param key ValidDatastoreEntryTypes the key to check for
+--- @return boolean exists whether it exists
+local function entryExists(store: Store, key: ValidDatastoreEntryTypes): boolean
+	local dataStore = store.DataStore :: AllowedStoreTypes
+	local success, result = pcall(dataStore.GetAsync, dataStore, key)
+	return success and result ~= nil
+end
+
+--- Attempts to get an entry in a data store with a key
+--- @param store Store the store to get the entry from
+--- @param key ValidDatastoreEntryTypes the key to get the value of
+--- @return any value the value of the key
+local function getEntry(store: Store, key: ValidDatastoreEntryTypes): any | nil
+	if not entryExists(store, key) then
+		error(ErrorModule.new("KeyMissing", `Key {key} is not a valid entry in {store.name}`))
+		return nil
+	end
+
+	--- Attempt to get the entry and return it
+	local dataStore = store.DataStore :: AllowedStoreTypes
+	local success, result = pcall(dataStore.GetAsync, dataStore, key)
+
+	if not success then
+		error(ErrorModule.new("GetFailure", `Unable to get entry {key}: {result}`))
+		return nil
+	end
+
+	return result
+end
+
+--- Attempts to update a store's key value to a new one, and returns if it succeded or not
+--- @param store Store The store to set the value in
+--- @param key ValidDatastoreEntryTypes The key to set the value of
+--- @param value any The value to set the key to
+--- @return boolean success if the operation was successful
+local function setEntry(store: Store, key: ValidDatastoreEntryTypes, value: any): boolean
+	local dataStore = store.DataStore :: AllowedStoreTypes
+
+	if value ~= nil then
+		--- Attempt to set key to value in data store
+		local success, result = pcall(dataStore.SetAsync, dataStore, key, value)
+		if not success then
+			debugErrorType("UpdateFailure", `Unable to set {key} to {value}: {result}`)
+			return false
+		end
+	else
+		--- Attempt to remove
+		local success, result = pcall(dataStore.RemoveAsync, dataStore, key)
+		if not success then
+			debugErrorType("UpdateFailure", `Unable to remove {key}: {result}`)
+			return false
+		end
+	end
+
+	return true
+end
+
+--- Removes an entry from a store
+--- @param store Store The store to remove the entry from
+--- @param key ValidDatastoreEntryTypes The key to remove
+--- @return boolean success if the operation was successful
+local function removeEntry(store: Store, key: ValidDatastoreEntryTypes): boolean
+	return setEntry(store, key, nil)
+end
+
+--- Attempts to get a key in a table in a datastore
+--- @param store Store The store to get the entry from
+--- @param key ValidDatastoreEntryTypes The key in the store to get
+--- @param tableKey ValidDatastoreEntryTypes The key in the table to get
+--- @return any | nil the value of the table key if it exists
+local function getTableEntry(store: Store, key: ValidDatastoreEntryTypes, tableKey: ValidDatastoreKey): any | nil
+	local success, result = pcall(function()
+		return getEntry(store, key)
+	end)
+
+	if not success then
+		error(ErrorModule.new("KeyMissing", `Unable to get {key}: {result}`))
+		return nil
+	end
+
+	-- Make sure result is a table
+	if typeof(result) ~= "table" then
+		error(ErrorModule.new("GetFailure", `Key {key} does not point to a table!`))
+		return nil
+	end
+
+	local value = result[tableKey]
+	if value == nil then
+		error(ErrorModule.new("KeyMissing", `Key {key} does not exist in result table`))
+		return nil
+	end
+
+	return value
+end
+
+--- Attempts to set a table entry in store to a new value
+--- @param store Store The store to set the table entry in
+--- @param key ValidDatastoreEntryTypes The key in the store to set
+--- @param tableKey ValidDatastoreEntryTypes The key in the table to set
+--- @param value any The value to set the table key to
+--- @return boolean success if the operation was successful
+--- Use this only for single-level dictionary entries.
+--- For nested paths, use SetNestedEntry so you do not replace the whole root table by mistake.
+local function setTableEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	tableKey: ValidDatastoreKey,
+	value: ValidDatastoreValue
+): boolean
+	--- Attempt to get the table
+	local success, result = pcall(function()
+		return getEntry(store, key)
+	end)
+
+	if not success then
+		error(ErrorModule.new("GetFailure", `Unable to get {key}: {result}`))
+		return false
+	end
+
+	-- Make sure result is a table
+	if typeof(result) ~= "table" then
+		debugErrorType("GetFailure", `Key {key} does not point to a table!`)
+		return false
+	end
+
+	-- The table and update async
+	result[tableKey] = value
+
+	success = pcall(function()
+		return setEntry(store, key, result)
+	end)
+
+	if not success then
+		error(ErrorModule.new("UpdateFailure", `Unable to set {key}::{tableKey} to {value}: {result}`))
+		return false
+	end
+
+	return true
+end
+
+--- Gets the parent table and final key for a nested path inside a datastore entry.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param keyPath {ValidDatastoreKey} the nested key path to traverse
+--- @return table?, ValidDatastoreKey? parentTable, finalKey if traversal succeeds
+local function getNestedTableTarget(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	keyPath: { ValidDatastoreKey }
+): ({ [any]: any }?, ValidDatastoreKey?)
+	if #keyPath == 0 then
+		error(ErrorModule.new("KeyMissing", `Key path cannot be empty for {store.name}`))
+		return nil, nil
+	end
+
+	local success, result = pcall(function()
+		return getEntry(store, key)
+	end)
+
+	if not success then
+		error(ErrorModule.new("KeyMissing", `Unable to get {key}: {result}`))
+		return nil, nil
+	end
+
+	if typeof(result) ~= "table" then
+		error(ErrorModule.new("GetFailure", `Key {key} does not point to a table!`))
+		return nil, nil
+	end
+
+	local currentTable = result
+	for index = 1, #keyPath - 1 do
+		local pathKey = keyPath[index]
+		local nextValue = currentTable[pathKey]
+		if type(nextValue) ~= "table" then
+			error(ErrorModule.new("KeyMissing", `Path segment {pathKey} is missing or not a table in {store.name}`))
+			return nil, nil
+		end
+		currentTable = nextValue
+	end
+
+	return currentTable, keyPath[#keyPath]
+end
+
+--- Attempts to get a nested key in a table in a datastore.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param keyPath {ValidDatastoreKey} the nested key path to traverse
+--- @return ValidDatastoreValue? the nested value if it exists
+--- Path order matters. For example: {"Loadouts", "Default", "Guns", 1}.
+--- Returns nil if any intermediate table is missing.
+local function getNestedEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	keyPath: { ValidDatastoreKey }
+): ValidDatastoreValue | nil
+	local parentTable, finalKey = getNestedTableTarget(store, key, keyPath)
+	if not parentTable or not finalKey then
+		return nil
+	end
+
+	local value = parentTable[finalKey]
+	if value == nil then
+		error(ErrorModule.new("KeyMissing", `Key path {table.concat(keyPath, ".")} does not exist in {store.name}`))
+		return nil
+	end
+
+	return value
+end
+
+--- Attempts to set a nested key in a table in a datastore.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param keyPath {ValidDatastoreKey} the nested key path to traverse
+--- @param value ValidDatastoreValue the value to write
+--- @return boolean success if the operation succeeded
+--- This mutates the nested leaf, then writes the full root table back to the datastore.
+--- Use this for edits like Loadouts.DefaultLoadout.Primary.
+local function setNestedEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	keyPath: { ValidDatastoreKey },
+	value: ValidDatastoreValue
+): boolean
+	local success, rootEntry = pcall(function()
+		return getEntry(store, key)
+	end)
+
+	if not success then
+		error(ErrorModule.new("GetFailure", `Unable to get {key}: {rootEntry}`))
+		return false
+	end
+
+	if typeof(rootEntry) ~= "table" then
+		debugErrorType("GetFailure", `Key {key} does not point to a table!`)
+		return false
+	end
+
+	local parentTable = rootEntry
+	local finalKey = keyPath[#keyPath]
+	if #keyPath == 0 then
+		error(ErrorModule.new("KeyMissing", `Key path cannot be empty for {store.name}`))
+		return false
+	end
+
+	for index = 1, #keyPath - 1 do
+		local pathKey = keyPath[index]
+		local nextValue = parentTable[pathKey]
+		if type(nextValue) ~= "table" then
+			error(ErrorModule.new("KeyMissing", `Path segment {pathKey} is missing or not a table in {store.name}`))
+			return false
+		end
+		parentTable = nextValue
+	end
+
+	if not parentTable or not finalKey then
+		return false
+	end
+
+	parentTable[finalKey] = value
+	return setEntry(store, key, rootEntry)
+end
+
+--- Creates a new store object with the parameters if it does not already exist
+--- @param name string the name of the store
+--- @param storeType DatastoreType the type of store to create
+--- @param dataStore DataStore the store object
+--- @param datastoreType DatastoreType the type of datastore to create
+--- @return Store store the store object
+--- Store objects are instance-style wrappers around the actual datastore functions.
+--- Use SetEntry for whole-record writes, SetTableEntry/GetTableEntry for one-level dictionaries,
+--- and SetNestedEntry/GetNestedEntry for deeper table paths.
+local function createStore(name: string, dataStore: AllowedStoreTypes, datastoreType: DatastoreType): Store
+	if DATA_STORES[datastoreType][name] == nil then
+		local metaInfo = getStoreMetaInfo(name)
+
+		local store: Store = {
+			name = name,
+			meta = metaInfo,
+			DataStore = dataStore,
+			__tostring = `{name} Datastore: {metaInfo}`,
+
+			--- Change a key
+			--- Overwrites the entire entry at `key`.
+			--- Use this when replacing a full record, not when changing one field.
+			SetEntry = function(self: Store, key: ValidDatastoreEntryTypes, value: any): boolean
+				local success, result = pcall(Module.setEntry, self, key, value)
+				if not success then
+					debugWarn("EntryFailure", `AddEntry failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Reads a single-level table entry such as `WeaponsOwned`.
+			--- Returns nil when the key is missing or the root entry is not a table.
+			GetTableEntry = function(self: Store, key: ValidDatastoreEntryTypes, tableKey: ValidDatastoreKey)
+				local success, result = pcall(Module.getTableEntry, self, key, tableKey)
+				if not success then
+					debugWarn("EntryFailure", `GetTableEntry failed for store '{self.name}'`, result)
+					return nil
+				end
+				return result
+			end,
+
+			--- Writes a single-level table entry such as `WeaponsOwned = {...}` or `Hello = false`.
+			--- Do not use this for deeper nested paths.
+			SetEntryData = function(
+				self: Store,
+				key: ValidDatastoreEntryTypes,
+				dataKey: ValidDatastoreKey,
+				value: ValidDatastoreValue
+			): boolean
+				local success, result = pcall(Module.setTableEntry, self, key, dataKey, value)
+				if not success then
+					debugWarn("EntryFailure", `SetEntryData failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Alias for SetEntryData when you want explicit table-entry naming.
+			--- Prefer this when you are working with dictionary-like data.
+			SetTableEntry = function(
+				self: Store,
+				key: ValidDatastoreEntryTypes,
+				tableKey: ValidDatastoreKey,
+				value: ValidDatastoreValue
+			): boolean
+				local success, result = pcall(Module.setTableEntry, self, key, tableKey, value)
+				if not success then
+					debugWarn("EntryFailure", `SetTableEntry failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Reads a nested value by path.
+			--- Example path for Inventory: { "Loadouts", "Default", "Guns", 1 }.
+			GetNestedEntry = function(self: Store, key: ValidDatastoreEntryTypes, keyPath: { ValidDatastoreKey })
+				local success, result = pcall(Module.getNestedEntry, self, key, keyPath)
+				if not success then
+					debugWarn("EntryFailure", `GetNestedEntry failed for store '{self.name}'`, result)
+					return nil
+				end
+				return result
+			end,
+
+			--- Writes a nested value by path.
+			--- This is the safe option when you need to modify a deep field without replacing the whole root table.
+			SetNestedEntry = function(
+				self: Store,
+				key: ValidDatastoreEntryTypes,
+				keyPath: { ValidDatastoreKey },
+				value: ValidDatastoreValue
+			): boolean
+				local success, result = pcall(Module.setNestedEntry, self, key, keyPath, value)
+				if not success then
+					debugWarn("EntryFailure", `SetNestedEntry failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Removes the entire entry at `key`.
+			RemoveEntry = function(self: Store, key: ValidDatastoreEntryTypes): boolean
+				local success, result = pcall(Module.removeEntry, self, key)
+				if not success then
+					debugWarn("EntryFailure", `RemoveEntry failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Reads the full entry at `key`.
+			GetEntry = function(self: Store, key: ValidDatastoreEntryTypes): any?
+				local success, result = pcall(Module.getEntry, self, key)
+				if not success then
+					debugWarn("EntryFailure", `GetEntry failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Checks whether an entry exists at `key`.
+			EntryExists = function(self: Store, key: ValidDatastoreEntryTypes): boolean
+				local success, result = pcall(Module.entryExists, self, key)
+				if not success then
+					debugWarn("EntryFailure", `EntryExists failed for store '{self.name}'`, result)
+					return false, "EntryFailure"
+				end
+				return true, result
+			end,
+
+			--- Meta info with the store
+			GetMetaInfo = function(self: Store): string
+				return self.meta
+			end,
+		}
+
+		DATA_STORES[datastoreType][name] = store
+		return store :: Store
+	end
+
+	return DATA_STORES[datastoreType][name] :: Store
+end
+
+--- Returns a list of all flat store objects that are currently loaded
+--- May be empty if attempted too soon after game creation
+local function getAllFlatStores(): { Store }
+	local stores = {}
+	for _, storeName in ipairs(FLAT_STORE_NAMES) do
+		local storeObj = getStore(storeName)
+		if not storeObj then
+			continue
+		end
+		table.insert(stores, storeObj)
+	end
+	return stores
+end
+
+--- Returns a list of all ordered store objects that are currently loaded
+--- May be empty if attempted too soon after game creation
+local function getAllOrderedStores(): { Store }
+	local stores = {}
+	for _, storeName in ipairs(ORDERED_STORE_NAMES) do
+		local storeObj = getStore(storeName)
+		if not storeObj then
+			continue
+		end
+		table.insert(stores, storeObj)
+	end
+	return stores
+end
+
+--- Returns a list of all cold stores that are currently loaded.
+local function getAllColdStores(): { Store }
+	local stores = {}
+	for _, storeName in ipairs(COLD_STORE_NAMES) do
+		local storeObj = getStore(storeName)
+		if not storeObj then
+			continue
+		end
+		table.insert(stores, storeObj)
+	end
+	return stores
+end
+
+--[[----------------------------------------------------------------------------------
+
+	Module Functions
+	Unlike mapping, this is required for basic store classes
+
+]]
+----------------------------------------------------------------------------------
+
+--- Returns the store object with the given name and type if it exists. Errors if the store is missing
+--- @param name string the name of the store
+--- @param storeType DatastoreType the type of store to get, if available, otherwise manually searches
+--- @return Store store the store object if it exists, or errors "StoreMissing"
+function Module.getStore(name: ValidStores | string, storeType: DatastoreType | nil): Store | nil
+	return getStore(name, storeType)
+end
+
+--- Returns whether or not "key" exists in data store
+--- @param dataStore DataStore the datastore to check
+--- @param key ValidDatastoreEntryTypes the key to check for
+--- @return boolean exists whether it exists
+function Module.entryExists(store: Store, key: ValidDatastoreEntryTypes): boolean
+	return entryExists(store, key)
+end
+
+--- Attempts to get an entry in a data store with a key
+--- @param store Store the store to get the entry from
+--- @param key ValidDatastoreEntryTypes the key to get the value of
+--- @return any value the value of the key
+function Module.getEntry(store: Store, key: ValidDatastoreEntryTypes): any | nil
+	return getEntry(store, key)
+end
+
+--- Attempts to update a store's key value to a new one, and returns if it succeded or not
+--- @param store Store The store to set the value in
+--- @param key ValidDatastoreEntryTypes The key to set the value of
+--- @param value any The value to set the key to
+--- @return boolean success if the operation was successful
+function Module.setEntry(store: Store, key: ValidDatastoreEntryTypes, value: any): boolean
+	return setEntry(store, key, value)
+end
+
+--- Removes an entry from a store
+--- @param store Store The store to remove the entry from
+--- @param key ValidDatastoreEntryTypes The key to remove
+--- @return boolean success if the operation was successful
+function Module.removeEntry(store: Store, key: ValidDatastoreEntryTypes): boolean
+	return removeEntry(store, key)
+end
+
+--- Attempts to get a key in a table in a datastore
+--- @param store Store The store to get the entry from
+--- @param key ValidDatastoreEntryTypes The key in the store to get
+--- @param tableKey ValidDatastoreEntryTypes The key in the table to get
+--- @return any | nil the value of the table key if it exists
+function Module.getTableEntry(store: Store, key: ValidDatastoreEntryTypes, tableKey: ValidDatastoreKey): any | nil
+	return getTableEntry(store, key, tableKey)
+end
+
+--- Attempts to set a table entry in store to a new value
+--- @param store Store The store to set the table entry in
+--- @param key ValidDatastoreEntryTypes The key in the store to set
+--- @param tableKey ValidDatastoreEntryTypes The key in the table to set
+--- @param value any The value to set the table key to
+--- @return boolean success if the operation was successful
+function Module.setTableEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	tableKey: ValidDatastoreKey,
+	value: ValidDatastoreValue
+): boolean
+	return setTableEntry(store, key, tableKey, value)
+end
+
+--- Attempts to get a nested key in a table in a datastore.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param keyPath {ValidDatastoreKey} the nested key path to traverse
+--- @return ValidDatastoreValue? the nested value if it exists
+function Module.getNestedEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	keyPath: { ValidDatastoreKey }
+): ValidDatastoreValue | nil
+	return getNestedEntry(store, key, keyPath)
+end
+
+--- Attempts to set a nested key in a table in a datastore.
+--- @param store Store the store to inspect
+--- @param key ValidDatastoreEntryTypes the entry key
+--- @param keyPath {ValidDatastoreKey} the nested key path to traverse
+--- @param value ValidDatastoreValue the value to write
+--- @return boolean success if the operation succeeded
+function Module.setNestedEntry(
+	store: Store,
+	key: ValidDatastoreEntryTypes,
+	keyPath: { ValidDatastoreKey },
+	value: ValidDatastoreValue
+): boolean
+	return setNestedEntry(store, key, keyPath, value)
+end
+
+Module.getAllFlatStores = getAllFlatStores
+Module.getAllOrderedStores = getAllOrderedStores
+Module.getAllColdStores = getAllColdStores
+
+--[[----------------------------------------------------------------------------------
+
+	Start & Test Features
+
+]]
+----------------------------------------------------------------------------------
+
+--- Initalization function
+local function load()
+	debugPrint("🟡🟡 Beginning Data API Build 🟡🟡")
+
+	--- Add the valid datastore type keys
+	for _, validType: DatastoreType in ipairs(DatastoreTypes) do
+		DATA_STORES[validType] = {}
+	end
+
+	--- Attempt to load each datastore
+	local success, result = pcall(function()
+		for _, storeName: string in ipairs(FLAT_STORE_NAMES) do
+			local dataStore: AllowedStoreTypes = DatastoreService:GetDataStore(storeName .. DATASTORE_VERSION)
+			local store: Store = createStore(storeName, dataStore, "DataStore")
+			debugPrint("Created:", store.__tostring)
+		end
+
+		for _, storeName: string in ipairs(COLD_STORE_NAMES) do
+			local dataStore: AllowedStoreTypes = DatastoreService:GetDataStore(storeName .. DATASTORE_VERSION)
+			local store: Store = createStore(storeName, dataStore, "DataStore")
+			debugPrint("Created:", store.__tostring)
+		end
+
+		for _, storeName: string in ipairs(ORDERED_STORE_NAMES) do
+			local dataStore: AllowedStoreTypes = DatastoreService:GetOrderedDataStore(storeName .. DATASTORE_VERSION)
+			local store: Store = createStore(storeName, dataStore, "OrderedDataStore")
+			debugPrint("Created:", store.__tostring)
+		end
+	end)
+
+	if not success then
+		debugWarn("🔴🔴 Could not create Datastores! 🔴🔴", result)
+		return
+	end
+
+	debugPrint("🟢🟢 DATA API FULLY LOADED 🟢🟢")
+	LOADED = true
+end
+
+--- Runs a developer test on the module
+local function test() end
+
+--[[----------------------------------------------------------------------------------
+
+	END
+
+]]
+----------------------------------------------------------------------------------
+
+Module.loaded = function()
+	return LOADED
+end
+
+--- Calling module.start() will start the module
+--- Calling module.test() will test a function of the module
+Module.load = load
+Module.test = test
+
+return Module
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="23">
+        <Properties>
+          <string name="Name">Types</string>
+          <string name="Source"><![CDATA[--[[------------------------------------------------------------------------------------
+   	
+   DATASTORE SCHEMA MODULE
+   
+   @module Types
+   @author mezz_inc
+   @description Holds the types used in the datastore module
+   
+   @within ServerScriptService/DataAPI
+]]
+------------------------------------------------------------------------------------
+
+local Types = {}
+
+--[[----------------------------------------------------------------------------------
+
+	TYPES
+
+]]
+----------------------------------------------------------------------------------
+
+export type DatastoreError = {
+	["type"]: ErrorType,
+	["message"]: string,
+	["__tostring"]: (self: DatastoreError) -> string,
+	["new"]: (type: ErrorType, message: string) -> DatastoreError,
+}
+
+export type ValidDatastorePrimitive = number | boolean | string
+
+export type ValidDatastoreKey = string | number
+
+export type ValidDatastoreValue =
+	ValidDatastorePrimitive
+	| { [string]: ValidDatastoreValue }
+	| { [number]: ValidDatastoreValue }
+
+export type ErrorType =
+	"ServiceUnavailable"
+	| "DatastoreMissing"
+	| "KeyMissing"
+	| "StoreFailure"
+	| "GetFailure"
+	| "UpdateFailure"
+	| "DeleteFailure"
+	| "StoreMissing"
+	| "EntryFailure"
+
+export type Store = {
+	["name"]: string,
+	["meta"]: string,
+	["DataStore"]: DataStore | OrderedDataStore,
+	["__tostring"]: string,
+	["SetEntry"]: (self: Store, key: any, value: ValidDatastoreValue) -> boolean,
+	["GetEntry"]: (self: Store, key: any) -> ValidDatastoreValue | nil,
+	["GetMetaInfo"]: (self: Store) -> string,
+	["RemoveEntry"]: (self: Store, key: any) -> boolean,
+	["EntryExists"]: (self: Store, key: any) -> boolean,
+	["SetEntryData"]: (
+		self: Store,
+		key: any,
+		keyValue: ValidDatastoreKey,
+		newValue: ValidDatastoreValue
+	) -> boolean,
+	["GetTableEntry"]: (self: Store, key: any, tableKey: ValidDatastoreKey) -> ValidDatastoreValue | nil,
+	["SetTableEntry"]: (
+		self: Store,
+		key: any,
+		tableKey: ValidDatastoreKey,
+		newValue: ValidDatastoreValue
+	) -> boolean,
+	["GetNestedEntry"]: (self: Store, key: any, keyPath: { ValidDatastoreKey }) -> ValidDatastoreValue | nil,
+	["SetNestedEntry"]: (
+		self: Store,
+		key: any,
+		keyPath: { ValidDatastoreKey },
+		newValue: ValidDatastoreValue
+	) -> boolean,
+}
+
+export type ValidPlayer = Player | number
+
+export type AllowedStoreTypes = DataStore | OrderedDataStore | GlobalDataStore
+
+export type DataStoreType = "DataStore" | "OrderedDataStore" | "GlobalDataStore"
+
+export type ValidStores = "KillCount" | "PlayerInfo" | "Preferences" | "Flags" | "Inventory"
+
+export type ValidInstanceValues = NumberValue | BoolValue | StringValue
+
+export type ValidDatastoreEntryTypes = ValidDatastoreValue
+
+export type PlayerRanks = "None" | "Play-Tester" | "Contributor" | "Admin" | "Developer"
+
+--[[----------------------------------------------------------------------------------
+]]
+----------------------------------------------------------------------------------
+
+return Types
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+    <Item class="Script" referent="24">
+      <Properties>
+        <string name="Name">ShopServer</string>
+        <token name="RunContext">0</token>
+        <string name="Source"><![CDATA[local ServerScriptService = game:GetService("ServerScriptService")
+local ShopServer = ServerScriptService.ShopServer
+local Queries = require(ShopServer.Queries)
+local Purchases = require(ShopServer.Purchases)
+
+local function load()
+	print("Loaded shop server system")
+	Queries.load()
+	Purchases.load()
+end
+
+load()
+]]></string>
+      </Properties>
+      <Item class="ModuleScript" referent="25">
+        <Properties>
+          <string name="Name">Purchases</string>
+          <string name="Source"><![CDATA[local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ShopRemotes = ReplicatedStorage:WaitForChild("ShopRemotes")
+local Purchases = {}
+
+local DataAPI = require(game.ServerScriptService.DataAPI.API)
+local ShopTypes = require(game.ReplicatedStorage.ShopClient.ShopTypes)
+
+local ShopBindables = ServerStorage.ShopBindables
+
+local function getWeaponInfo(weaponName: string): ShopTypes.WeaponInfo?
+	local GetWeaponInfoBindable = ShopBindables.GetWeaponInfo
+	local response = GetWeaponInfoBindable:Invoke(weaponName)
+	return response
+end
+
+local function getPlayerCredits(player: Player): number
+	local credits = DataAPI.getPlayerInfo(player, "Credits")
+	return credits or 0
+end
+
+local function getPlayerLevel(player: Player): number
+	local level = DataAPI.getPlayerInfo(player, "Level")
+	return level or 0
+end
+
+local function addOwnedItem(player: Player, weaponName: string): (boolean, string)
+	local ownedItems = DataAPI.getPlayerOwnedItems(player) :: { string }?
+	if not ownedItems then
+		ownedItems = {}
+	end
+
+	if table.find(ownedItems, weaponName) then
+		warn("Already owned")
+		return false, "Item already owned"
+	end
+
+	DataAPI.addPlayerOwnedItem(player, weaponName)
+
+	return true, "Item added to inventory"
+end
+
+local function purchaseRequest(player: Player, itemName: string)
+	local itemInfo = getWeaponInfo(itemName)
+	if not itemInfo then
+		return false, "Item not found"
+	end
+
+	local playerCredits = getPlayerCredits(player)
+	if playerCredits < itemInfo.Price then
+		return false, "Not enough credits"
+	end
+
+	local playerLevel = getPlayerLevel(player)
+	if playerLevel < itemInfo.Level then
+		return false, "Player level too low"
+	end
+
+	-- attempt to remove credits
+	local success, err = DataAPI.incrementPlayerInfo(player, "Credits", -itemInfo.Price)
+	if not success then
+		return false, err
+	end
+
+	local success, message = addOwnedItem(player, itemName)
+
+	if not success then
+		return false, message
+	end
+
+	ShopRemotes.ItemPurchased:FireClient(player, itemName)
+
+	return true, "Purchase successful"
+end
+
+function Purchases.load()
+	ShopRemotes.RequestPurchase.OnServerInvoke = purchaseRequest
+end
+
+return Purchases
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="26">
+        <Properties>
+          <string name="Name">Queries</string>
+          <string name="Source"><![CDATA[local Queries = {}
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local ItemInfo = ServerStorage.ShopStorage:WaitForChild("ItemInfo")
+local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
+local ShopRemotes = ReplicatedStorage:WaitForChild("ShopRemotes")
+local ShopBindables = ServerStorage.ShopBindables
+
+local DataAPI = require(game.ServerScriptService.DataAPI.API)
+
+local MODULE_INFOS: { [string]: {} } = {}
+local MODULES_BY_CATEGORY: { [string]: { [string]: {} } } = {}
+
+type Category = ShopTypes.Category
+type Weight = ShopTypes.Weight
+type Pill = ShopTypes.Pill
+type FilterInfo = ShopTypes.FilterInfo
+type ShopInfo = ShopTypes.ShopInfo
+type ArmorInfo = ShopTypes.ArmorInfo
+type MeleeInfo = ShopTypes.MeleeInfo
+type GunInfo = ShopTypes.GunInfo
+type WeaponInfo = ShopTypes.WeaponInfo
+type Query = ShopTypes.ShopQuery
+
+local function normalizeLower(value: string?): string
+	if type(value) ~= "string" then
+		return ""
+	end
+	return string.lower(value)
+end
+
+local function matchesWeight(info: WeaponInfo, weightsQuery: Weight | { Weight }?): boolean
+	if weightsQuery == nil then
+		return true
+	end
+
+	if type(weightsQuery) == "string" then
+		return info.Weight == weightsQuery
+	end
+
+	if type(weightsQuery) == "table" then
+		for _, allowedWeight in ipairs(weightsQuery) do
+			if info.Weight == allowedWeight then
+				return true
+			end
+		end
+		return false
+	end
+
+	return true
+end
+
+local function getSortValue(info: WeaponInfo, sortBy: string): any
+	if string.sub(sortBy, 1, 9) == "ItemInfo." then
+		local itemInfoKey = string.sub(sortBy, 10)
+		local itemInfo = info.ItemInfo
+		if type(itemInfo) == "table" then
+			return itemInfo[itemInfoKey]
+		end
+		return nil
+	end
+
+	return (info :: any)[sortBy]
+end
+
+local function projectInfo(info: WeaponInfo, fields: { string }?): { [string]: any }
+	if fields == nil or #fields == 0 then
+		return info :: any
+	end
+
+	local projected: { [string]: any } = {}
+	for _, key in ipairs(fields) do
+		if string.sub(key, 1, 9) == "ItemInfo." then
+			local itemInfoKey = string.sub(key, 10)
+			projected.ItemInfo = projected.ItemInfo or {}
+			local itemInfo = info.ItemInfo
+			if type(itemInfo) == "table" then
+				projected.ItemInfo[itemInfoKey] = itemInfo[itemInfoKey]
+			end
+		else
+			projected[key] = (info :: any)[key]
+		end
+	end
+
+	return projected
+end
+
+local function passesBaseFilters(info: WeaponInfo, query: Query): boolean
+	if not matchesWeight(info, query.weights) then
+		return false
+	end
+
+	if query.nameContains then
+		local target = normalizeLower(query.nameContains)
+		if not string.find(normalizeLower(info.Name), target, 1, true) then
+			return false
+		end
+	end
+
+	if query.search then
+		local target = normalizeLower(query.search)
+		local nameMatches = string.find(normalizeLower(info.Name), target, 1, true) ~= nil
+		local loreMatches = string.find(normalizeLower(info.Lore), target, 1, true) ~= nil
+		if not (nameMatches or loreMatches) then
+			return false
+		end
+	end
+
+	if query.priceMin and info.Price < query.priceMin then
+		return false
+	end
+
+	if query.priceMax and info.Price > query.priceMax then
+		return false
+	end
+
+	if query.levelMin and info.Level < query.levelMin then
+		return false
+	end
+
+	if query.levelMax and info.Level > query.levelMax then
+		return false
+	end
+
+	if query.consumable ~= nil and info.Consumable ~= query.consumable then
+		return false
+	end
+
+	if query.groupUnlocked ~= nil and info.GroupUnlocked ~= query.groupUnlocked then
+		return false
+	end
+
+	if query.customFilters then
+		for key, expectedValue in pairs(query.customFilters) do
+			if string.sub(key, 1, 9) == "ItemInfo." then
+				local itemInfo = info.ItemInfo
+				local itemInfoKey = string.sub(key, 10)
+				if type(itemInfo) ~= "table" or itemInfo[itemInfoKey] ~= expectedValue then
+					return false
+				end
+			elseif (info :: any)[key] ~= expectedValue then
+				return false
+			end
+		end
+	end
+
+	return true
+end
+
+local TYPE_RANK = {
+	number = 1,
+	string = 2,
+	boolean = 3,
+	table = 4,
+	userdata = 5,
+	thread = 6,
+	["function"] = 7,
+	["nil"] = 99,
+}
+
+local function normalizeSortKey(value: any): (number, number?, string?)
+	if type(value) == "number" and value ~= value then
+		value = nil
+	end
+
+	local valueType = type(value)
+	local rank = TYPE_RANK[valueType] or 98
+
+	if valueType == "number" then
+		return rank, value, nil
+	end
+
+	if valueType == "string" then
+		return rank, nil, string.lower(value)
+	end
+
+	if valueType == "boolean" then
+		return rank, value and 1 or 0, nil
+	end
+
+	if valueType == "nil" then
+		return rank, nil, nil
+	end
+
+	return rank, nil, tostring(value)
+end
+
+local function applySort(infos: { WeaponInfo }, query: Query)
+	local sortBy = query.sortBy or "Name"
+	local direction = query.sortDir == "desc" and -1 or 1
+
+	local decorated = {}
+	for i, info in ipairs(infos) do
+		local rank, numberKey, stringKey = normalizeSortKey(getSortValue(info, sortBy))
+		table.insert(decorated, {
+			index = i,
+			name = info.Name,
+			rank = rank,
+			numberKey = numberKey,
+			stringKey = stringKey,
+			info = info,
+		})
+	end
+
+	table.sort(decorated, function(a, b)
+		if a.rank ~= b.rank then
+			if direction == 1 then
+				return a.rank < b.rank
+			end
+			return a.rank > b.rank
+		end
+
+		if a.numberKey ~= b.numberKey then
+			if direction == 1 then
+				return (a.numberKey :: number) < (b.numberKey :: number)
+			end
+			return (a.numberKey :: number) > (b.numberKey :: number)
+		end
+
+		if a.stringKey ~= b.stringKey then
+			if direction == 1 then
+				return (a.stringKey :: string) < (b.stringKey :: string)
+			end
+			return (a.stringKey :: string) > (b.stringKey :: string)
+		end
+
+		if a.name ~= b.name then
+			return a.name < b.name
+		end
+
+		return a.index < b.index
+	end)
+
+	for i, row in ipairs(decorated) do
+		infos[i] = row.info
+	end
+end
+
+local function applyPagination(infos: { WeaponInfo }, query: Query): { WeaponInfo }
+	local offset = math.max(0, math.floor(query.offset or 0))
+	local limit = query.limit and math.max(0, math.floor(query.limit)) or nil
+	local startIndex = offset + 1
+	local endIndex = limit and math.min(#infos, startIndex + limit - 1) or #infos
+
+	local output: { WeaponInfo } = {}
+	for i = startIndex, endIndex do
+		local value = infos[i]
+		if value ~= nil then
+			table.insert(output, value)
+		end
+	end
+
+	return output
+end
+
+local function toResultShape(infos: { WeaponInfo }, query: Query?, defaultReturnType: "map" | "array")
+	local returnType = defaultReturnType
+	if query and query.returnType then
+		returnType = query.returnType
+	end
+
+	if returnType == "map" then
+		local mapped: { [string]: any } = {}
+		for _, info in ipairs(infos) do
+			mapped[info.Name] = projectInfo(info, query and query.fields or nil)
+		end
+		return mapped
+	end
+
+	local output: { any } = {}
+	for _, info in ipairs(infos) do
+		table.insert(output, projectInfo(info, query and query.fields or nil))
+	end
+	return output
+end
+
+local function getInfo(moduleName: string): WeaponInfo?
+	local cached = MODULE_INFOS[moduleName]
+	if cached then
+		return cached :: WeaponInfo
+	end
+
+	local moduleScript = ItemInfo:FindFirstChild(moduleName)
+	if not moduleScript then
+		warn("Module not found: " .. moduleName)
+		return nil
+	end
+
+	local info = require(moduleScript) :: WeaponInfo
+	if type(info) ~= "table" or type(info.Category) ~= "string" or type(info.Name) ~= "string" then
+		warn("Invalid weapon module schema for: " .. moduleName)
+		return nil
+	end
+
+	MODULE_INFOS[moduleName] = info
+	if not MODULES_BY_CATEGORY[info.Category] then
+		MODULES_BY_CATEGORY[info.Category] = {}
+	end
+	MODULES_BY_CATEGORY[info.Category][moduleName] = info
+
+	return info
+end
+
+local function queryCategory(category: string, query: Query?): any
+	local byCategory = MODULES_BY_CATEGORY[category]
+	if not byCategory then
+		return {}
+	end
+
+	local filtered: { WeaponInfo } = {}
+	for _, info in pairs(byCategory) do
+		if not query or passesBaseFilters(info :: WeaponInfo, query) then
+			table.insert(filtered, info :: WeaponInfo)
+		end
+	end
+
+	if query then
+		applySort(filtered, query)
+		filtered = applyPagination(filtered, query)
+	end
+
+	local defaultReturnType = query and "array" or "map"
+	return toResultShape(filtered, query, defaultReturnType)
+end
+
+local function normalizeInvokeArgs(firstArg: any, secondArg: any, thirdArg: any): (any, any)
+	if typeof(firstArg) == "Instance" and (firstArg :: Instance):IsA("Player") then
+		return secondArg, thirdArg
+	end
+
+	return firstArg, secondArg
+end
+
+local function getWeaponInfo(weaponNameOrQuery: any, maybeQuery: Query?)
+	local weaponName: string? = nil
+	local query: Query? = nil
+
+	if type(weaponNameOrQuery) == "string" then
+		weaponName = weaponNameOrQuery
+		query = maybeQuery
+	elseif type(weaponNameOrQuery) == "table" then
+		local q = weaponNameOrQuery :: Query
+		query = q
+		weaponName = q.name
+	end
+
+	if not weaponName then
+		warn("no first param")
+		return nil
+	end
+
+	local info = getInfo(weaponName)
+	if not info then
+		warn("no info")
+		return nil
+	end
+
+	if query and query.fields and #query.fields > 0 then
+		local result = projectInfo(info, query.fields)
+		print(result)
+		return result
+	end
+
+	return info
+end
+
+local function getOwnedItems(player: Player): { string }
+	local ownedItems = DataAPI.getPlayerOwnedItems(player)
+	if not ownedItems then
+		return {}
+	end
+	return ownedItems
+end
+
+local function getWeaponInfoInvoke(firstArg: any, secondArg: any, thirdArg: any)
+	local weaponNameOrQuery, maybeQuery = normalizeInvokeArgs(firstArg, secondArg, thirdArg)
+	return getWeaponInfo(weaponNameOrQuery, maybeQuery)
+end
+
+local function getAllInfoForCategory(categoryOrQuery: any, maybeQuery: Query?)
+	local category: string? = nil
+	local query: Query? = nil
+
+	if type(categoryOrQuery) == "string" then
+		category = categoryOrQuery
+		query = maybeQuery
+	elseif type(categoryOrQuery) == "table" then
+		local q = categoryOrQuery :: Query
+		query = q
+		category = q.category
+	end
+
+	if not category then
+		return {}
+	end
+
+	return queryCategory(category, query)
+end
+
+local function getAllInfoForCategoryInvoke(firstArg: any, secondArg: any, thirdArg: any)
+	local categoryOrQuery, maybeQuery = normalizeInvokeArgs(firstArg, secondArg, thirdArg)
+	return getAllInfoForCategory(categoryOrQuery, maybeQuery)
+end
+
+function Queries.load()
+	for _, module in ipairs(ItemInfo:GetChildren()) do
+		getInfo(module.Name)
+	end
+
+	ShopRemotes.GetWeaponInfo.OnServerInvoke = getWeaponInfoInvoke
+	ShopRemotes.GetAllInfoForCategory.OnServerInvoke = getAllInfoForCategoryInvoke
+	ShopRemotes.GetOwnedItems.OnServerInvoke = getOwnedItems
+	ShopBindables.GetWeaponInfo.OnInvoke = getWeaponInfoInvoke
+	ShopBindables.GetAllInfoForCategory.OnInvoke = getAllInfoForCategoryInvoke
+end
+
+return Queries
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerStorage" referent="27">
+    <Properties>
+      <string name="Name">ServerStorage</string>
+    </Properties>
+    <Item class="Folder" referent="28">
+      <Properties>
+        <string name="Name">ShopStorage</string>
+      </Properties>
+      <Item class="Folder" referent="29">
+        <Properties>
+          <string name="Name">ItemInfo</string>
+        </Properties>
+        <Item class="ModuleScript" referent="30">
+          <Properties>
+            <string name="Name">AK-47</string>
+            <string name="Source"><![CDATA[return {
+	Name = "AK-47",
+	Category = "Gun",
+	Weight = "Moderate",
+	Price = 1250,
+	Level = 4,
+	Lore = "Stolen from a CS-GO player. They're not happy. Please don't tell them.",
+	SpecialText = "",
+	GroupUnlocked = true,
+	Consumable = false,
+
+	PreviewImage = "rbxassetid://135952675018132",
+
+	ItemInfo = {
+		FireType = "Auto",
+		Damage = 30,
+		Firerate = 0.1,
+		Bullets = 30,
+		ZoomFOV = 10,
+		BulletSpeed = 1000,
+		Spread = 0.05,
+		Range = 1000,
+		Recoil = 15,
+		ReloadTime = 3,
+		HeadshotMultiplier = 2,
+		DamageType = "Bullet",
+	},
+
+	Pills = {},
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="31">
+          <Properties>
+            <string name="Name">Hyperlaser Gun</string>
+            <string name="Source"><![CDATA[return {
+	Name = "Hyperlaser Gun",
+	Category = "Gun",
+	Weight = "Light",
+	Price = 5000,
+	Level = 20,
+	Lore = "Found under a UFO. Scientists believe this is the future of weaponry. Others are eating toasters.",
+	SpecialText = "Vaporizes on kill",
+	GroupUnlocked = false,
+	Consumable = false,
+
+	PreviewImage = "rbxassetid://87310765672717",
+
+	ItemInfo = {
+		FireType = "Semi",
+		Damage = 30,
+		Firerate = 0.1,
+		Bullets = 13,
+		ZoomFOV = 14,
+		BulletSpeed = 2000,
+		Spread = 0.1,
+		Range = 1000,
+		ReloadTime = 1.5,
+		Recoil = 25,
+		HeadshotMultiplier = 1.3,
+		DamageType = "Special",
+	},
+
+	Pills = {
+		{ Text = "Group", Color = Color3.new(1, 0, 0.0156863) },
+		{ Text = "Vaporizes", Color = Color3.new(0, 0.682353, 1) },
+	},
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="32">
+          <Properties>
+            <string name="Name">Machete</string>
+            <string name="Source"><![CDATA[return {
+	Name = "Machete",
+	Category = "Melee",
+	Weight = "Moderate",
+	Price = 700,
+	Level = 2,
+	Lore = 'Seller reports "Great in forests ", but common insight suggests its actually terrible',
+	SpecialText = "Kills plant-like NPCs more efficiently",
+	GroupUnlocked = false,
+	Consumable = false,
+
+	PreviewImage = "rbxassetid://102316729615704",
+
+	ItemInfo = {
+		Damage = 30,
+		SwingDebounce = 0.5,
+		DamageType = "Sharp",
+	},
+
+	Pills = {},
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="33">
+          <Properties>
+            <string name="Name">PPSH 41</string>
+            <string name="Source"><![CDATA[return {
+	Name = "PPSH 41",
+	Category = "Gun",
+	Weight = "Heavy",
+	Price = 6000,
+	Level = 45,
+	Lore = "This gun isn't in the game, but I needed an example.",
+	SpecialText = "",
+	GroupUnlocked = false,
+	Consumable = false,
+
+	PreviewImage = "rbxassetid://134498040939435",
+
+	ItemInfo = {
+		FireType = "Auto",
+		Damage = 15,
+		Firerate = 0.1,
+		ZoomFOV = 10,
+		Bullets = 40,
+		BulletSpeed = 1000,
+		Spread = 0.4,
+		Range = 700,
+		Recoil = 20,
+		ReloadTime = 3,
+		HeadshotMultiplier = 1.3,
+		DamageType = "Special",
+	},
+
+	Pills = {},
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="34">
+          <Properties>
+            <string name="Name">Revolver</string>
+            <string name="Source"><![CDATA[return {
+	Name = "Revolver",
+	Category = "Gun",
+	Weight = "Light",
+	Price = 2000,
+	Level = 7,
+	Lore = "Great for taking out single targets. Not great for consumption, according to FoodReviews",
+	SpecialText = "",
+	GroupUnlocked = false,
+	Consumable = false,
+
+	PreviewImage = "rbxassetid://123783343505431",
+
+	ItemInfo = {
+		FireType = "Semi",
+		Damage = 50,
+		Firerate = 0.5,
+		Bullets = 6,
+		ZoomFOV = 30,
+		BulletSpeed = 1500,
+		Spread = 0.02,
+		Range = 1500,
+		Recoil = 40,
+		ReloadTime = 3.4,
+		HeadshotMultiplier = 3,
+		DamageType = "Bullet",
+	},
+
+	Pills = {},
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="35">
+          <Properties>
+            <string name="Name">Vest</string>
+            <string name="Source"><![CDATA[return {
+	Name = "Vest",
+	Category = "Armor",
+	Weight = "Moderate",
+	Price = 10000,
+	Level = 35,
+	Lore = "Provides basic-level damage protection and occasionally diseases",
+	SpecialText = "",
+	GroupUnlocked = false,
+	Consumable = true,
+	MaxStack = 1,
+
+	PreviewImage = "rbxassetid://130394544327723",
+
+	ItemInfo = {
+		BulletResistance = 0.2,
+		SharpResistance = 0.1,
+		BluntResistance = 0.1,
+		ArmorType = "Vest",
+	},
+
+	Pills = {},
+}
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="SoundService" referent="36">
+    <Properties>
+      <string name="Name">SoundService</string>
+      <bool name="RespectFilteringEnabled">true</bool>
+    </Properties>
+  </Item>
+  <Item class="StarterPlayer" referent="37">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="38">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="39">
+        <Properties>
+          <string name="Name">Client</string>
+          <string name="Source"><![CDATA[local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local uis = game:GetService("UserInputService")
+local shop = require(ReplicatedStorage.ShopClient.UI.Shop)
+
+ReplicatedStorage.Datastore.LoadClientData:FireServer()
+
+uis.InputBegan:Connect(function(obj, ev)
+	if ev then
+		return
+	end
+	if game.Players.LocalPlayer:GetAttribute("InShop") then
+		return
+	end
+
+	if obj.KeyCode == Enum.KeyCode.E then
+		shop.new("TestShop")
+	end
+end)
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="Workspace" referent="40">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="FilteringEnabled">true</bool>
+      <bool name="NeedsPivotMigration">false</bool>
+    </Properties>
+    <Item class="Part" referent="41">
+      <Properties>
+        <string name="Name">Baseplate</string>
+        <bool name="Anchored">true</bool>
+        <Color3uint8 name="Color3uint8">6512483</Color3uint8>
+        <bool name="Locked">true</bool>
+        <Vector3 name="Position">
+          <X>0</X>
+          <Y>-10</Y>
+          <Z>0</Z>
+        </Vector3>
+        <Vector3 name="size">
+          <X>512</X>
+          <Y>20</Y>
+          <Z>512</Z>
+        </Vector3>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>
