@@ -7,6 +7,7 @@ local Zone = require(ReplicatedStorage.Zone.Zone)
 local SLSGui = require(ReplicatedStorage.ShopClient.UI.SLSGui)
 
 local Shops = workspace:WaitForChild("Shops")
+local LoadoutAreas = workspace:WaitForChild("LoadoutAreas")
 
 ReplicatedStorage.Datastore.LoadClientData:FireServer()
 
@@ -16,7 +17,7 @@ local controls = playerModule:GetControls()
 local isInShop = false
 local canEnterShop = true
 
-local ENTER_DELAY = 0.5
+local ENTER_DELAY = 0.1
 
 local function setMovementEnabled(enabled: boolean)
 	if enabled then
@@ -41,6 +42,19 @@ local function leaveShop()
 	startEntryCooldown(5)
 end
 
+local function enterLoadout(loadoutModel: Model)
+	isInShop = true
+	canEnterShop = false
+
+	setMovementEnabled(false)
+
+	local shop = SLSGui.new({
+		startState = "Loadout",
+	})
+
+	shop:Start("Loadout")
+end
+
 local function enterShop(shopModel: Model)
 	isInShop = true
 	canEnterShop = false
@@ -53,28 +67,6 @@ local function enterShop(shopModel: Model)
 	})
 
 	shop:Start("Shop")
-end
-
-local function onCharacterEntered(zone, shopModel)
-	if not LocalPlayer.Character or LocalPlayer.Character ~= LocalPlayer.Character then
-		return
-	end
-
-	if isInShop or not canEnterShop then
-		return
-	end
-
-	task.wait(ENTER_DELAY)
-
-	if isInShop then
-		return
-	end
-
-	if not zone:CharacterPresent(LocalPlayer.Character) then
-		return
-	end
-
-	enterShop(shopModel)
 end
 
 local function loadShops()
@@ -95,7 +87,7 @@ local function loadShops()
 				return
 			end
 
-			task.wait(0.5)
+			task.wait(ENTER_DELAY)
 
 			if isInShop then
 				return
@@ -103,6 +95,31 @@ local function loadShops()
 
 			if zone:CharacterPresent(LocalPlayer.Character) then
 				enterShop(shopModel)
+			end
+		end)
+	end
+
+	for _, loadoutArea in LoadoutAreas:GetChildren() do
+		local trigger = loadoutArea:WaitForChild("Trigger")
+		local zone = Zone.new(trigger)
+
+		zone.CharacterEntered:Connect(function(character)
+			if character ~= LocalPlayer.Character then
+				return
+			end
+
+			if isInShop or not canEnterShop then
+				return
+			end
+
+			task.wait(ENTER_DELAY)
+
+			if isInShop then
+				return
+			end
+
+			if zone:CharacterPresent(LocalPlayer.Character) then
+				enterLoadout(loadoutArea)
 			end
 		end)
 	end

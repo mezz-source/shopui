@@ -147,13 +147,15 @@ function SLSGui.new(options: SLSGuiOptions?)
 
 	self.song = AdaptiveMusic.new("RunningOnDeadTime", false)
 
-	self.shop = ShopUI.new(self.shopModelName, {
-		gui = self.shopMain,
-		autoStart = false,
-		onExitRequested = function()
-			self:RequestClose()
-		end,
-	})
+	if self.shopModelName then
+		self.shop = ShopUI.new(self.shopModelName, {
+			gui = self.shopMain,
+			autoStart = false,
+			onExitRequested = function()
+				self:RequestClose()
+			end,
+		})
+	end
 	self.loadout = LoadoutUI.new(self.loadoutMain, {
 		onExitRequested = function()
 			self:RequestClose()
@@ -167,7 +169,6 @@ function SLSGui.new(options: SLSGuiOptions?)
 
 	setVisible(self.optionsMain, true)
 	setVisible(self.loadoutMain, false)
-	setVisible(self.shopMain, false)
 	setVisible(self.statsMain, false)
 	self:LoadSounds()
 
@@ -182,16 +183,23 @@ function SLSGui.new(options: SLSGuiOptions?)
 		self:SetState("Loadout")
 	end)
 
-	self:bindButton(self.optionsMain, "Shop", function()
-		local fadeTime = (120 / self.song.conductor.bpm) * 2
-		self.song:ScheduleFadeInSections(1, "Leads", 0.5, fadeTime)
-		self.song:ScheduleFadeInSections(1, "Chords", 0.5, fadeTime)
-		self.song:ScheduleFadeInSections(1, "Backing", 0.5, fadeTime)
-		self.song:ScheduleFadeInSections(1, "Bassline", 0.5, fadeTime)
-		self.song:ScheduleFadeInSections(1, "Percussion", 0.5, fadeTime)
+	if self.shopModelName then
+		setVisible(self.shopMain, false)
 
-		self:SetState("Shop")
-	end)
+		self:bindButton(self.optionsMain, "Shop", function()
+			local fadeTime = (120 / self.song.conductor.bpm) * 2
+			self.song:ScheduleFadeInSections(1, "Leads", 0.5, fadeTime)
+			self.song:ScheduleFadeInSections(1, "Chords", 0.5, fadeTime)
+			self.song:ScheduleFadeInSections(1, "Backing", 0.5, fadeTime)
+			self.song:ScheduleFadeInSections(1, "Bassline", 0.5, fadeTime)
+			self.song:ScheduleFadeInSections(1, "Percussion", 0.5, fadeTime)
+
+			self:SetState("Shop")
+		end)
+	else
+		self.optionsMain.MenuOptions.Options.ShopFrame.Visible = false
+	end
+
 	self:bindButton(self.optionsMain, "Stats", function()
 		self:SetState("Stats")
 	end)
