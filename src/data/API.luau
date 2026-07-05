@@ -667,11 +667,18 @@ end
 ----------------------------------------------------------------------------------
 
 export type PlayerLoadout = {
-	[string]: { string },
+	[number]: string,
 }
 
 export type PlayerLoadouts = {
 	[string]: PlayerLoadout,
+}
+
+export type LoadoutMutationResult = {
+	Success: boolean,
+	Reason: string?,
+	Loadouts: PlayerLoadouts?,
+	ActiveLoadout: string?,
 }
 
 export type PlayerInventory = {
@@ -699,6 +706,63 @@ local function getDefaultInventoryTemplate(): PlayerInventory
 	local scheme = Schema.getSchemaForStore("Inventory")
 	return deepCopy(scheme) :: PlayerInventory
 end
+
+local MAX_LOADOUT_NAME_LENGTH = 32
+local DEFAULT_MAX_LOADOUTS = 25
+
+local function trimString(value: string): string
+	return string.gsub(value, "^%s*(.-)%s*$", "%1")
+end
+
+local function isValidLoadoutName(loadoutName: string): (boolean, string?)
+	local trimmed = trimString(loadoutName)
+	if trimmed == "" then
+		return false, "Loadout name cannot be empty"
+	end
+
+	if string.len(trimmed) > MAX_LOADOUT_NAME_LENGTH then
+		return false, `Loadout name cannot exceed {MAX_LOADOUT_NAME_LENGTH} characters`
+	end
+
+	if not string.match(trimmed, "^[%w _%-]+$") then
+		return false, "Loadout name contains unsupported characters"
+	end
+
+	return true, nil
+end
+
+local function countLoadouts(loadouts: PlayerLoadouts): number
+	local count = 0
+	for _ in pairs(loadouts) do
+		count += 1
+	end
+	return count
+end
+
+local function normalizeLoadoutName(loadoutName: string): string
+	return trimString(loadoutName)
+end
+
+local function validateLoadoutPayload(loadoutData: PlayerLoadout): (boolean, string?)
+	if type(loadoutData) ~= "table" then
+		return false, "Loadout payload must be a table"
+	end
+
+	for key, value in pairs(loadoutData) do
+		if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+			return false, "Loadout keys must be positive integer slot indexes"
+		end
+
+		if type(value) ~= "string" then
+			return false, "Loadout item names must be strings"
+		end
+	end
+
+	return true, nil
+end
+
+local getPlayerActiveLoadout: (Player: ValidPlayer) -> string?
+local setPlayerActiveLoadout: (Player: ValidPlayer, loadoutName: string) -> boolean
 
 local function resetPlayerLoadoutsToDefault(Player: ValidPlayer): boolean
 	local inventoryEntry = getNewestEntry(Player, "Inventory")
@@ -831,6 +895,25 @@ local function getPlayerLoadouts(Player: ValidPlayer): PlayerLoadouts?
 	return inventory.Loadouts
 end
 
+local function getPlayerLoadoutsResult(Player: ValidPlayer): LoadoutMutationResult
+	local loadouts = getPlayerLoadouts(Player)
+	if not loadouts then
+		return {
+			Success = false,
+			Reason = "Could not retrieve player loadouts",
+			Loadouts = nil,
+			ActiveLoadout = nil,
+		}
+	end
+
+	return {
+		Success = true,
+		Reason = nil,
+		Loadouts = loadouts,
+		ActiveLoadout = getPlayerActiveLoadout(Player),
+	}
+end
+
 --- Returns one named loadout.
 --- @param Player ValidPlayer player id or object
 --- @param loadoutName string the loadout name
@@ -853,10 +936,25 @@ end
 --- @param loadoutName string the loadout name
 --- @param loadoutData PlayerLoadout the full loadout payload
 --- @return boolean success whether the operation succeeded
-local function setPlayerLoadout(Player: ValidPlayer, loadoutName: string, loadoutData: PlayerLoadout): boolean
-	if loadoutName == "" then
-		warn("Cannot set loadout with empty name")
+local function setPlayerLoadout(Player: ValidPlayer, loadoutName: string, loadoutData: PlayerLoadout | nil): boolean
+	if type(loadoutName) ~= "string" then
+		warn("Cannot set loadout with non-string name")
 		return false
+	end
+
+	local normalizedName = normalizeLoadoutName(loadoutName)
+	local nameIsValid, nameError = isValidLoadoutName(normalizedName)
+	if not nameIsValid then
+		warn(nameError)
+		return false
+	end
+
+	if loadoutData ~= nil then
+		local payloadIsValid, payloadError = validateLoadoutPayload(loadoutData)
+		if not payloadIsValid then
+			warn(payloadError)
+			return false
+		end
 	end
 
 	if not ensureInventoryLoadoutVersion(Player) then
@@ -865,7 +963,129 @@ local function setPlayerLoadout(Player: ValidPlayer, loadoutName: string, loadou
 
 	local userId = getSafeUserId(Player)
 	local store = Core.getStore("Inventory")
-	return store:SetNestedEntry(userId, { "Loadouts", loadoutName }, loadoutData)
+	return store:SetNestedEntry(userId, { "Loadouts", normalizedName }, loadoutData)
+end
+
+local function upsertPlayerLoadout(
+	Player: ValidPlayer,
+	loadoutName: string,
+	loadoutData: PlayerLoadout,
+	maxLoadouts: number?
+): LoadoutMutationResult
+	if type(loadoutName) ~= "string" then
+		return { Success = false, Reason = "Loadout name must be a string" }
+	end
+
+	local normalizedName = normalizeLoadoutName(loadoutName)
+	local nameIsValid, nameError = isValidLoadoutName(normalizedName)
+	if not nameIsValid then
+		return { Success = false, Reason = nameError }
+	end
+
+	local payloadIsValid, payloadError = validateLoadoutPayload(loadoutData)
+	if not payloadIsValid then
+		return { Success = false, Reason = payloadError }
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return { Success = false, Reason = "Inventory entry failed validation" }
+	end
+
+	local loadouts = getPlayerLoadouts(Player)
+	if not loadouts then
+		return { Success = false, Reason = "Could not retrieve player loadouts" }
+	end
+
+	local maxAllowedLoadouts = math.max(1, math.floor(maxLoadouts or DEFAULT_MAX_LOADOUTS))
+	local loadoutExists = loadouts[normalizedName] ~= nil
+	if not loadoutExists and countLoadouts(loadouts) >= maxAllowedLoadouts then
+		return {
+			Success = false,
+			Reason = `Loadout limit reached ({maxAllowedLoadouts})`,
+			Loadouts = loadouts,
+			ActiveLoadout = getPlayerActiveLoadout(Player),
+		}
+	end
+
+	local success = setPlayerLoadout(Player, normalizedName, loadoutData)
+	if not success then
+		return {
+			Success = false,
+			Reason = "Failed to save loadout",
+			Loadouts = getPlayerLoadouts(Player),
+			ActiveLoadout = getPlayerActiveLoadout(Player),
+		}
+	end
+
+	local updatedLoadouts = getPlayerLoadouts(Player)
+	return {
+		Success = true,
+		Reason = nil,
+		Loadouts = updatedLoadouts,
+		ActiveLoadout = getPlayerActiveLoadout(Player),
+	}
+end
+
+local function removePlayerLoadout(Player: ValidPlayer, loadoutName: string): LoadoutMutationResult
+	if type(loadoutName) ~= "string" then
+		return { Success = false, Reason = "Loadout name must be a string" }
+	end
+
+	local normalizedName = normalizeLoadoutName(loadoutName)
+	local nameIsValid, nameError = isValidLoadoutName(normalizedName)
+	if not nameIsValid then
+		return { Success = false, Reason = nameError }
+	end
+
+	if not ensureInventoryLoadoutVersion(Player) then
+		return { Success = false, Reason = "Inventory entry failed validation" }
+	end
+
+	local loadouts = getPlayerLoadouts(Player)
+	if not loadouts then
+		return { Success = false, Reason = "Could not retrieve player loadouts" }
+	end
+
+	if not loadouts[normalizedName] then
+		return {
+			Success = false,
+			Reason = "Loadout does not exist",
+			Loadouts = loadouts,
+			ActiveLoadout = getPlayerActiveLoadout(Player),
+		}
+	end
+
+	if not setPlayerLoadout(Player, normalizedName, nil) then
+		return {
+			Success = false,
+			Reason = "Failed to remove loadout",
+			Loadouts = getPlayerLoadouts(Player),
+			ActiveLoadout = getPlayerActiveLoadout(Player),
+		}
+	end
+
+	local activeLoadout = getPlayerActiveLoadout(Player)
+	local updatedLoadouts = getPlayerLoadouts(Player) or {}
+	if activeLoadout == normalizedName then
+		local fallbackLoadout: string? = nil
+		for existingName in pairs(updatedLoadouts) do
+			fallbackLoadout = existingName
+			break
+		end
+
+		if fallbackLoadout then
+			setPlayerActiveLoadout(Player, fallbackLoadout)
+		else
+			setPlayerTableEntryData(Player, "Inventory", "ActiveLoadout", "")
+		end
+	end
+
+	return {
+		Success = true,
+		Reason = nil,
+		Loadouts = getPlayerLoadouts(Player),
+		ActiveLoadout = getPlayerActiveLoadout(Player),
+	}
 end
 
 --- Retrieves a nested entry inside a named loadout.
@@ -906,7 +1126,7 @@ local function setPlayerLoadoutEntry(
 	Player: ValidPlayer,
 	loadoutName: string,
 	entryPath: { ValidDatastoreKey },
-	newValue: ValidDatastoreValue
+	newValue: ValidDatastoreValue | nil
 ): boolean
 	if loadoutName == "" or #entryPath == 0 then
 		warn("Cannot set loadout entry with empty name or path")
@@ -930,7 +1150,7 @@ end
 --- Returns the active loadout name.
 --- @param Player ValidPlayer player id or object
 --- @return string? activeLoadout current active loadout name
-local function getPlayerActiveLoadout(Player: ValidPlayer): string?
+getPlayerActiveLoadout = function(Player: ValidPlayer): string?
 	if not ensureInventoryLoadoutVersion(Player) then
 		return nil
 	end
@@ -947,7 +1167,7 @@ end
 --- @param Player ValidPlayer player id or object
 --- @param loadoutName string the loadout name to activate
 --- @return boolean success whether the operation succeeded
-local function setPlayerActiveLoadout(Player: ValidPlayer, loadoutName: string): boolean
+setPlayerActiveLoadout = function(Player: ValidPlayer, loadoutName: string): boolean
 	if loadoutName == "" then
 		warn("Cannot set empty active loadout")
 		return false
@@ -1210,8 +1430,11 @@ Module.playerOwnsItem = playerOwnsItem
 Module.addPlayerOwnedItem = addPlayerOwnedItem
 Module.removePlayerOwnedItem = removePlayerOwnedItem
 Module.getPlayerLoadouts = getPlayerLoadouts
+Module.getPlayerLoadoutsResult = getPlayerLoadoutsResult
 Module.getPlayerLoadout = getPlayerLoadout
 Module.setPlayerLoadout = setPlayerLoadout
+Module.upsertPlayerLoadout = upsertPlayerLoadout
+Module.removePlayerLoadout = removePlayerLoadout
 Module.getPlayerLoadoutEntry = getPlayerLoadoutEntry
 Module.setPlayerLoadoutEntry = setPlayerLoadoutEntry
 Module.getPlayerActiveLoadout = getPlayerActiveLoadout
@@ -1278,6 +1501,15 @@ DatastoreRep.getPlayerInfo.OnServerInvoke = function(Player, otherPlayer, infoKe
 			return nil
 		end
 		return getPlayerInfo(otherPlayer or Player, infoKey)
+	end)
+end
+
+DatastoreRep.getPlayerInventory.OnServerInvoke = function(Player, otherPlayer)
+	return safeInvoke(function()
+		if not canAccess(Player, otherPlayer) then
+			return nil
+		end
+		return getAllPlayerInventory(otherPlayer or Player)
 	end)
 end
 

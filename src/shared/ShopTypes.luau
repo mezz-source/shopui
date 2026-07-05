@@ -89,6 +89,8 @@ export type WeaponInfo = {
 	Level: number,
 	Lore: string,
 	SpecialText: string,
+	BadgeTag: string?,
+	GroupId: number?,
 	GroupUnlocked: boolean,
 	Consumable: boolean,
 	MaxStack: number?,

@@ -1,9 +1,9 @@
 return {
-	_version = "1.0.2",
+	_version = "1.0.3",
 	_served = false,
 	OwnedItems = {},
 	Loadouts = {
-		Empty = {},
+		Default = {},
 	},
-	ActiveLoadout = "Empty",
+	ActiveLoadout = "Default",
 }

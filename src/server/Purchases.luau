@@ -24,6 +24,32 @@ local function getPlayerLevel(player: Player): number
 	return level or 0
 end
 
+local function hasBadgeUnlocked(_player: Player, _badgeTag: string): boolean
+	-- Stubbed for now; replace with your badge ownership logic.
+	return false
+end
+
+local function passesSpecialUnlockRequirement(player: Player, itemInfo: ShopTypes.WeaponInfo): boolean
+	local badgeTag = itemInfo.BadgeTag
+	local groupId = itemInfo.GroupId
+
+	if badgeTag == nil and groupId == nil then
+		return true
+	end
+
+	local badgeUnlocked = false
+	if badgeTag ~= nil and badgeTag ~= "" then
+		badgeUnlocked = hasBadgeUnlocked(player, badgeTag)
+	end
+
+	local groupUnlocked = false
+	if groupId ~= nil and groupId > 0 then
+		groupUnlocked = player:IsInGroupAsync(groupId)
+	end
+
+	return badgeUnlocked or groupUnlocked
+end
+
 local function addOwnedItem(player: Player, weaponName: string): (boolean, string)
 	local ownedItems = DataAPI.getPlayerOwnedItems(player) :: { string }?
 	if not ownedItems then
@@ -54,6 +80,10 @@ local function purchaseRequest(player: Player, itemName: string)
 	local playerLevel = getPlayerLevel(player)
 	if playerLevel < itemInfo.Level then
 		return false, "Player level too low"
+	end
+
+	if not passesSpecialUnlockRequirement(player, itemInfo) then
+		return false, "Special unlock requirement not met"
 	end
 
 	-- attempt to remove credits

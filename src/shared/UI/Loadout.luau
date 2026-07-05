@@ -16,14 +16,23 @@ local Player = Players.LocalPlayer
 
 local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
 local RemoteInfo = Remotes:WaitForChild("GetWeaponInfo")
+local GetPlayerLoadouts = Remotes:WaitForChild("GetPlayerLoadouts")
+local ValidateLoadout = Remotes:WaitForChild("ValidateLoadout")
+local RemoveLoadout = Remotes:WaitForChild("RemoveLoadout")
+local SetActiveLoadout = Remotes:FindFirstChild("SetActiveLoadout")
 local LoadoutConfigs = script.Parent.Parent:WaitForChild("LoadoutConfigs")
 local WeaponPreviews = ReplicatedStorage:WaitForChild("WeaponPreview")
+
+local Datastore = ReplicatedStorage:WaitForChild("Datastore")
+local GetPlayerInventory = Datastore:WaitForChild("getPlayerInventory")
 
 local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
 local AnimationHandler = require(script.Parent.Parent.AnimationHandler)
 
 local CAMERA_MOUSE_INFLUENCE = 0.24
 local CAMERA_LERP_ALPHA = 0.01
+local WEAPON_INFO_CACHE_TTL_SECONDS = 180
+local OWNED_ITEMS_CACHE_TTL_SECONDS = 2
 
 type WeaponSlot = ShopTypes.WeaponSlot
 type WeaponChoice = ShopTypes.WeaponChoice
@@ -77,15 +86,35 @@ end
 
 --[[
 
+	LOADOUT BUTTONS
+
+]]
+
+local function selectLoadoutButton(button)
+	button.BackgroundTransparency = 0
+	button.BackgroundColor3 = Color3.new(1, 1, 1)
+	button.WeaponName.TextColor3 = Color3.new(0, 0, 0)
+	button.RemoveButton.ImageColor3 = Color3.new(0, 0, 0)
+end
+
+local function unselectLoadoutButton(button)
+	button.BackgroundTransparency = 0.5
+	button.BackgroundColor3 = Color3.new(0, 0, 0)
+	button.WeaponName.TextColor3 = Color3.new(1, 1, 1)
+	button.RemoveButton.ImageColor3 = Color3.new(1, 1, 1)
+end
+
+--[[
+
 	CHARACTER EQUIP/ANIMATION HANDLER
 
 ]]
 
-local function getAnimsFromGunModel(model: Model): { ["Idle"]: number, ["Equip"]: number }
+local function getAnimsFromGunModel(model: Model): { ["Idle"]: string, ["Equip"]: string }
 	local Setting = model:FindFirstChild("Setting")
 	if not Setting then
 		warn("Gun", model.Name, "is missing settings module")
-		return { Idle = 0, Equip = 0 }
+		return { Idle = "0", Equip = "0" }
 	end
 
 	local module = require(Setting)
@@ -95,11 +124,11 @@ local function getAnimsFromGunModel(model: Model): { ["Idle"]: number, ["Equip"]
 	}
 end
 
-local function getAnimsFromMeleeModel(model: Model): { ["Idle"]: number, ["Equip"]: number }
+local function getAnimsFromMeleeModel(model: Model): { ["Idle"]: string, ["Equip"]: string }
 	local Animations = model:FindFirstChild("Animations") :: Folder
 	if not Animations then
 		warn("Melee weapon", model.Name, "is missing animations")
-		return { Idle = 0, Equip = 0 }
+		return { Idle = "0", Equip = "0" }
 	end
 
 	local Idle = Animations:WaitForChild("Idle") :: Animation
@@ -120,7 +149,7 @@ function LoadoutUI:CharacterWeldWeapon(weaponModel: Model)
 
 	if Base4 then
 		Base4.Anchored = false
-		print("Base4")
+		-- print("Base4")
 		self.base4Weld.Part1 = Base4
 		self.base4Weld.Part0 = self.characterRightArm
 		self.base4Weld.C0 = CFrame.new(0, 0, 0)
@@ -129,7 +158,7 @@ function LoadoutUI:CharacterWeldWeapon(weaponModel: Model)
 
 	if NotHandle then
 		NotHandle.Anchored = false
-		print("NotHandle")
+		-- print("NotHandle")
 		self.notHandleWeld.Part1 = NotHandle
 		self.notHandleWeld.Part0 = self.characterRightArm
 		self.notHandleWeld.C0 = CFrame.new(0, 0, 0)
@@ -138,12 +167,12 @@ function LoadoutUI:CharacterWeldWeapon(weaponModel: Model)
 
 	-- If neither special parts exist, try to weld the regular Handle
 	if not Base4 and not NotHandle then
-		print("Neither Base4 nor NotHandle found, trying to weld Handle")
+		-- print("Neither Base4 nor NotHandle found, trying to weld Handle")
 		local Handle = weaponModel:FindFirstChild("Handle")
 
 		if Handle then
 			Handle.Anchored = false
-			print("Handle")
+			-- print("Handle")
 			-- Use an existing handleWeld if present, otherwise fall back to base4Weld
 			local weld = self.rightGrip
 			weld.Part1 = Handle
@@ -276,6 +305,260 @@ end
 
 --[[
 
+	LOADOUT CREATION, LOADING, DELETION
+
+]]
+
+function LoadoutUI:SetLoadoutStatusText(text: string, isError: boolean)
+	local statusText = self.loadoutStatusText :: TextLabel
+	statusText.Text = text
+	statusText.TextColor3 = isError and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(255, 255, 255)
+	statusText.TextTransparency = 0
+
+	if self.fadeThread then
+		coroutine.close(self.fadeThread)
+	end
+
+	if self.fadeTween then
+		self.fadeTween:Cancel()
+	end
+
+	self.fadeThread = coroutine.create(function()
+		task.wait(3)
+		self.fadeTween = TweenService:Create(statusText, TweenInfo.new(1), { TextTransparency = 1 })
+		self.fadeTween:Play()
+	end)
+
+	coroutine.resume(self.fadeThread)
+end
+
+function LoadoutUI:LoadoutMatches(loadoutA: ShopTypes.Loadout, loadoutB: ShopTypes.Loadout): boolean
+	if #loadoutA ~= #loadoutB then
+		return false
+	end
+
+	for i = 1, #loadoutA do
+		if loadoutA[i] ~= loadoutB[i] then
+			return false
+		end
+	end
+
+	return true
+end
+
+function LoadoutUI:GetLoadoutFromSlots(slots: { WeaponSlot }): ShopTypes.Loadout
+	local loadout: ShopTypes.Loadout = {}
+	for i, slot in ipairs(slots) do
+		loadout[i] = slot.CurrentItem
+	end
+	return loadout
+end
+
+function LoadoutUI:CreateLoadoutFromSlots(name: string, slots: { WeaponSlot })
+	local response = ValidateLoadout:InvokeServer(name, self:GetLoadoutFromSlots(slots))
+	local success, reason = response["Success"], response["Reason"]
+	if success then
+		if typeof(response["Loadouts"]) == "table" then
+			self.loadouts = response["Loadouts"]
+		end
+		self:SetLoadoutStatusText(`{name} saved successfully`, false)
+		return true
+	else
+		warn(`Failed to create loadout {name}: {reason}`)
+		self:SetLoadoutStatusText(reason, true)
+		return false
+	end
+end
+
+function LoadoutUI:LoadLoadoutIntoSlots(loadout: ShopTypes.Loadout)
+	self.isApplyingLoadout = true
+
+	for i, slot in ipairs(self.weaponSlots) do
+		local weaponName = loadout[i]
+		if weaponName then
+			local isEmpty = weaponName == "None"
+			if isEmpty then
+				self:UnequipWeaponFromSlot(i, false)
+				continue
+			end
+			local itemInfo = self:GetWeaponInfoCached(weaponName)
+			if itemInfo then
+				local weaponChoice = {
+					Name = itemInfo.Name,
+					Weight = itemInfo.Weight,
+					PreviewImage = itemInfo.PreviewImage,
+					Button = nil,
+				}
+				local isFirstSlot = i == 1
+				self:EquipWeaponToSlot(weaponChoice, i, isFirstSlot)
+			end
+		else
+			self:UnequipWeaponFromSlot(i, true)
+		end
+	end
+
+	self.isApplyingLoadout = false
+	self:SyncLoadoutSelectionState()
+end
+
+function LoadoutUI:DeleteLoadout(name: string)
+	if self.isDeletingLoadout then
+		return false
+	end
+
+	self.isDeletingLoadout = true
+
+	local result = RemoveLoadout:InvokeServer(name)
+	local success = result["Success"]
+	local message = result["Reason"]
+	if not success then
+		self:SetLoadoutStatusText(message, true)
+		warn(message)
+	else
+		if typeof(result["Loadouts"]) == "table" then
+			self.loadouts = result["Loadouts"]
+		end
+	end
+
+	self.isDeletingLoadout = false
+
+	return success
+end
+
+function LoadoutUI:SetActiveLoadout(loadoutName: string)
+	-- This is slow so lets save this after we're done
+	task.defer(function()
+		if SetActiveLoadout and SetActiveLoadout:IsA("RemoteFunction") then
+			local callSuccess, response = pcall(function()
+				return SetActiveLoadout:InvokeServer(loadoutName)
+			end)
+
+			if not callSuccess then
+				warn(`Failed to set active loadout '{loadoutName}': {response}`)
+			elseif typeof(response) == "table" and response["Success"] == false then
+				warn(`Failed to set active loadout '{loadoutName}': {response["Reason"] or "Unknown reason"}`)
+			end
+		else
+			warn("ShopRemotes.SetActiveLoadout is missing")
+		end
+	end)
+end
+
+function LoadoutUI:EquipLoadout(loadoutName: string, loadout: ShopTypes.Loadout, noSound: boolean?)
+	if loadoutName == self.currentLoadoutName then
+		return
+	end
+
+	self:SetActiveLoadout(loadoutName)
+
+	self.currentLoadoutName = loadoutName
+	self:LoadLoadoutIntoSlots(loadout)
+	if not noSound then
+		self:PlaySound("Equip")
+	end
+end
+
+function LoadoutUI:SyncLoadoutSelectionState()
+	if self.isApplyingLoadout then
+		return
+	end
+
+	local selectedButton = self.lastSelectedLoadoutButton
+	if not selectedButton then
+		return
+	end
+
+	local selectedLoadout = self.loadouts[selectedButton.Name]
+	if typeof(selectedLoadout) ~= "table" then
+		return
+	end
+
+	local currentSlots = self:GetLoadoutFromSlots(self.weaponSlots)
+	local loadoutMatches = self:LoadoutMatches(selectedLoadout, currentSlots)
+	if loadoutMatches then
+		return
+	end
+
+	unselectLoadoutButton(selectedButton)
+	self.lastSelectedLoadoutButton = nil
+	self.currentLoadoutName = "Custom"
+end
+
+function LoadoutUI:BounceAddLoadoutButton()
+	if not self.loadoutAddButton then
+		return
+	end
+
+	local addButton = self.loadoutAddButton :: TextButton
+	local uiScale = addButton:FindFirstChild("UIScale")
+	if not uiScale then
+		uiScale = Instance.new("UIScale")
+		uiScale.Parent = addButton
+	end
+
+	local shrinkTween = TweenService:Create(
+		uiScale,
+		TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Scale = 0.9 }
+	)
+	local growTween = TweenService:Create(
+		uiScale,
+		TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Scale = 1 }
+	)
+
+	shrinkTween:Play()
+	task.delay(0.08, function()
+		growTween:Play()
+	end)
+end
+
+function LoadoutUI:CreateLoadoutButton(loadoutName: string, loadout: ShopTypes.Loadout)
+	local reference = self.loadoutScroll:FindFirstChild("Reference") :: Frame
+	local buttonClone = reference:Clone() :: TextButton
+	local removeButton = buttonClone:WaitForChild("RemoveButton") :: ImageButton
+	local weaponName = buttonClone.WeaponName :: TextLabel
+	buttonClone.Name = loadoutName
+	buttonClone.Visible = true
+	buttonClone.Parent = self.loadoutScroll
+	weaponName.Text = loadoutName
+	self.loadouts[loadoutName] = loadout
+
+	buttonClone.MouseButton1Down:Connect(function()
+		if self.lastSelectedLoadoutButton then
+			-- print("unselect")
+			unselectLoadoutButton(self.lastSelectedLoadoutButton)
+		end
+
+		self.lastSelectedLoadoutButton = buttonClone
+
+		selectLoadoutButton(buttonClone)
+		local selectedLoadout = self.loadouts[loadoutName] or loadout
+		self:EquipLoadout(loadoutName, selectedLoadout)
+	end)
+
+	removeButton.MouseButton1Down:Connect(function()
+		if not self:DeleteLoadout(loadoutName) then
+			return
+		end
+
+		self.loadouts[loadoutName] = nil
+
+		if self.lastSelectedLoadoutButton == buttonClone then
+			self.lastSelectedLoadoutButton = nil
+		end
+
+		self:PlaySound("Unequip")
+		buttonClone:Destroy()
+	end)
+
+	self:HookBaseButtonSounds(buttonClone)
+	self:HookBaseButtonSounds(removeButton)
+	return buttonClone
+end
+
+--[[
+
 	INIT & CONFIG SETUP
 
 ]]
@@ -305,12 +588,28 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 	self.sounds = {}
 	self.weaponSlots = {}
 	self.ownedItems = {}
+	self.ownedItemsCache = {
+		items = {} :: { string },
+		expiresAt = 0,
+	}
 	self.weaponChoices = {}
+	self.weaponInfoCache = {} :: { [string]: { info: ShopTypes.WeaponInfo, expiresAt: number } }
 
-	-- TODO: Integrate filtering
+	-- TODO: Implement "Custom" loadout switch
+	-- The user can load a loadout, change something, then reslect it
+	-- Otherwise we accidentally lock them out
+	self.loadouts = {}
+	self.lastLoadoutList = {}
+	self.currentLoadoutName = "Default"
+	self.setLoadoutName = ""
+	self.addLoadoutLocked = false
+	self.isApplyingLoadout = false
+	self.isDeletingLoadout = false
+
 	self.validWeights = { "Light", "Moderate", "Heavy" }
 	self.searchName = ""
 
+	self.lastSelectedLoadoutButton = nil
 	self.lastSelectedSlot = nil
 
 	local Character = self.loadoutCharacter:WaitForChild("Character")
@@ -341,6 +640,42 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 	return self
 end
 
+function LoadoutUI:RefreshLoadoutSelection()
+	local rawResult = GetPlayerLoadouts:InvokeServer()
+	local inventorySetting = GetPlayerInventory:InvokeServer()
+	local activeLoadout = inventorySetting["ActiveLoadout"] or "Default"
+	local getSavedLoadouts = rawResult
+
+	--- Remove existing loadout buttons
+	for _, button in ipairs(self.loadoutScroll:GetChildren()) do
+		if button:IsA("TextButton") and button.Name ~= "Reference" then
+			button:Destroy()
+		end
+	end
+
+	if typeof(rawResult) == "table" and rawResult["Success"] ~= nil then
+		if not rawResult["Success"] then
+			local reason = rawResult["Reason"] or "Failed to load saved loadouts"
+			self:SetLoadoutStatusText(reason, true)
+			warn(reason)
+			getSavedLoadouts = {}
+		else
+			getSavedLoadouts = rawResult["Loadouts"] or {}
+		end
+	end
+
+	self.loadouts = getSavedLoadouts
+
+	for name, loadout in pairs(getSavedLoadouts) do
+		local button = self:CreateLoadoutButton(name, loadout)
+		if name == activeLoadout then
+			self:EquipLoadout(name, loadout, true)
+			self.lastSelectedLoadoutButton = button
+			selectLoadoutButton(button)
+		end
+	end
+end
+
 function LoadoutUI:Init()
 	self:LoadSounds()
 	self:InitCharacter()
@@ -348,6 +683,61 @@ function LoadoutUI:Init()
 
 	self:InitFrameInstances()
 	self:InitConfigSlots()
+end
+
+function LoadoutUI:GetWeaponInfoCached(weaponName: string, forceRefresh: boolean?): ShopTypes.WeaponInfo?
+	local now = os.clock()
+	local cached = self.weaponInfoCache[weaponName]
+	if not forceRefresh and cached and cached.expiresAt > now then
+		return cached.info
+	end
+
+	local ok, itemInfo = pcall(function()
+		return RemoteInfo:InvokeServer(weaponName)
+	end)
+
+	if not ok then
+		warn(`Failed to get item info for {weaponName}: {itemInfo}`)
+		return nil
+	end
+
+	if not itemInfo then
+		return nil
+	end
+
+	self.weaponInfoCache[weaponName] = {
+		info = itemInfo,
+		expiresAt = now + WEAPON_INFO_CACHE_TTL_SECONDS,
+	}
+
+	return itemInfo
+end
+
+function LoadoutUI:GetOwnedItemsCached(forceRefresh: boolean?): { string }
+	local now = os.clock()
+	local cache = self.ownedItemsCache
+	if not forceRefresh and cache.expiresAt > now then
+		return table.clone(cache.items)
+	end
+
+	local ok, ownedItems = pcall(function()
+		return Remotes.GetOwnedItems:InvokeServer()
+	end)
+
+	if not ok then
+		warn(`Failed to get owned items: {ownedItems}`)
+		return table.clone(cache.items)
+	end
+
+	if typeof(ownedItems) ~= "table" then
+		warn("No owned items provided")
+		return table.clone(cache.items)
+	end
+
+	cache.items = table.clone(ownedItems)
+	cache.expiresAt = now + OWNED_ITEMS_CACHE_TTL_SECONDS
+
+	return table.clone(cache.items)
 end
 
 function LoadoutUI:InitFrameInstances()
@@ -364,7 +754,7 @@ function LoadoutUI:InitFrameInstances()
 		self:UpdateWeaponSelection()
 	end)
 
-	for _, child in ipairs(WeightFilters:getChildren()) do
+	for _, child in ipairs(WeightFilters:GetChildren()) do
 		if child:IsA("ImageButton") and child:HasTag("Weight") then
 			child.MouseButton1Down:Connect(function()
 				local isSelected = child.BackgroundTransparency == 0
@@ -375,13 +765,69 @@ function LoadoutUI:InitFrameInstances()
 	end
 
 	local WeaponSlots = UIFrame:WaitForChild("WeaponSlots")
-	-- local LoadoutArea = UIFrame:WaitForChild("LoadoutArea")
-	-- local WeightBar = UIFrame:WaitForChild("WeightBar")
+	local LoadoutArea = UIFrame:WaitForChild("LoadoutArea")
+	local LoadoutStatusText = LoadoutArea:WaitForChild("LoadoutStatusText")
+	local LoadoutEntry = LoadoutArea:WaitForChild("LoadoutEntry")
+	local AddLoadoutButton = LoadoutEntry:WaitForChild("Add")
+	local LoadoutNameEntry = LoadoutEntry.EntryArea:WaitForChild("TextBox")
+	local LoadoutScroll = LoadoutArea:WaitForChild("LoadoutScroll")
+	LoadoutNameEntry:GetPropertyChangedSignal("Text"):Connect(function()
+		self.setLoadoutName = LoadoutNameEntry.Text
+	end)
+
+	self.loadoutScroll = LoadoutScroll
+	self.loadoutStatusText = LoadoutStatusText
+	self.loadoutAddButton = AddLoadoutButton
+	self.loadoutNameEntry = LoadoutNameEntry
+	self.loadoutScroll = LoadoutScroll
 
 	self.searchBox = SearchTextBox
 	self.weaponSlotsUI = WeaponSlots
 	self.weaponSelection = WeaponSelection
 	self.weightBar = WeightBar
+
+	AddLoadoutButton.MouseButton1Down:Connect(function()
+		if self.addLoadoutLocked then
+			return
+		end
+
+		if self.setLoadoutName == "" then
+			self:SetLoadoutStatusText(`Loadout name cannot be empty`, true)
+			warn("Cannot create loadout with empty name")
+			return
+		end
+
+		self.addLoadoutLocked = true
+		self:BounceAddLoadoutButton()
+
+		local success = self:CreateLoadoutFromSlots(self.setLoadoutName, self.weaponSlots)
+		if success then
+			if self.loadouts[self.setLoadoutName] == nil then
+				self.loadouts[self.setLoadoutName] = self:GetLoadoutFromSlots(self.weaponSlots)
+			end
+			-- check for existing button
+			local button = LoadoutScroll:FindFirstChild(self.setLoadoutName)
+			if not button then
+				button = self:CreateLoadoutButton(self.setLoadoutName, self.loadouts[self.setLoadoutName])
+			end
+
+			-- Select this button
+			if self.lastSelectedLoadoutButton then
+				unselectLoadoutButton(self.lastSelectedLoadoutButton)
+			end
+
+			self.lastSelectedLoadoutButton = button
+
+			selectLoadoutButton(button)
+
+			-- Set active loadout
+			self:SetActiveLoadout(self.setLoadoutName)
+		end
+
+		task.delay(0.5, function()
+			self.addLoadoutLocked = false
+		end)
+	end)
 end
 
 function LoadoutUI:InitConfigSlots()
@@ -410,7 +856,7 @@ function LoadoutUI:InitConfigSlots()
 			end
 
 			self:PlaySound("Unequip")
-			self:UnequipWeaponFromSlot(i)
+			self:UnequipWeaponFromSlot(i, true)
 
 			-- Close weapon selection when they clicked OUR slot while viewing weapons
 			if self.weaponSelectionVisible and self.lastSelectedSlot == slot then
@@ -451,7 +897,7 @@ end
 function LoadoutUI:InitButtons()
 	for _, desc in ipairs(self.mainFrame:GetDescendants()) do
 		if desc:IsA("TextButton") or desc:IsA("ImageButton") then
-			print(desc.Name)
+			-- print(desc.Name)
 			self:HookBaseButtonSounds(desc)
 		end
 	end
@@ -505,6 +951,7 @@ function LoadoutUI:LoadCharacterDescription()
 	if not self.characterModel then
 		return
 	end
+
 	local success, err = pcall(function()
 		local desc = Players:GetHumanoidDescriptionFromUserIdAsync(Player.UserId)
 		self.characterModel.Humanoid:ApplyDescription(desc)
@@ -544,19 +991,27 @@ end
 
 ]]
 
-function LoadoutUI:UnequipWeaponFromSlot(slotIndex: number)
+function LoadoutUI:UnequipWeaponFromSlot(slotIndex: number, unequipEffects: boolean?)
 	local slot = self.weaponSlots[slotIndex] :: WeaponSlot
 	if not slot then
 		warn(`No slot found for index {slotIndex}`, self.weaponSlots)
 		return
 	end
 
-	self:NewWeaponUnequipped(slotIndex)
+	if unequipEffects then
+		self:NewWeaponUnequipped(slotIndex)
+	end
+
 	self:ClearWeaponInSlot(slotIndex)
 	self:UpdateWeightBar()
+	self:SyncLoadoutSelectionState()
 end
 
-function LoadoutUI:EquipWeaponToSlot(weaponChoice: WeaponChoice, slotIndex: number): (boolean, string?)
+function LoadoutUI:EquipWeaponToSlot(
+	weaponChoice: WeaponChoice,
+	slotIndex: number,
+	equipEffects: boolean?
+): (boolean, string?)
 	local slot = self.weaponSlots[slotIndex] :: WeaponSlot
 	if not slot then
 		warn(`No slot found for index {slotIndex}`, self.weaponSlots)
@@ -566,11 +1021,13 @@ function LoadoutUI:EquipWeaponToSlot(weaponChoice: WeaponChoice, slotIndex: numb
 	local canEquip = self:CanEquipWeaponInSlot(weaponChoice, slotIndex)
 	if not canEquip then
 		self:FlashWeightBar()
-		return false, "Weight exceeded"
+		return false, "WeightExceeded"
 	end
 
-	self:NewWeaponEquipped(weaponChoice, slotIndex)
-	self:SetSlotSelected(self.lastSelectedSlot, false)
+	if self.lastSelectedSlot then
+		self:SetSlotSelected(self.lastSelectedSlot, false)
+	end
+
 	self.lastSelectedSlot = nil
 
 	local existingSlot = self:GetSlotWithWeaponName(weaponChoice.Name)
@@ -591,6 +1048,12 @@ function LoadoutUI:EquipWeaponToSlot(weaponChoice: WeaponChoice, slotIndex: numb
 	slot.CurrentItem = weaponChoice.Name
 	slot.Weight = weaponChoice.Weight
 	self:UpdateWeightBar()
+
+	if equipEffects then
+		self:NewWeaponEquipped(weaponChoice, slotIndex)
+	end
+
+	self:SyncLoadoutSelectionState()
 
 	return true, "Success"
 end
@@ -619,34 +1082,29 @@ end
 
 ]]
 
-function LoadoutUI:UpdateOwnedWeapons()
-	local ownedItems = Remotes.GetOwnedItems:InvokeServer() :: { string }
-	if not ownedItems then
-		warn("No owned items provided")
-		return
-	end
-
-	self.ownedItems = ownedItems
+function LoadoutUI:UpdateOwnedWeapons(forceRefresh: boolean?)
+	self.ownedItems = self:GetOwnedItemsCached(forceRefresh)
 end
 
-function LoadoutUI:UpdateWeaponSelection()
+function LoadoutUI:UpdateWeaponSelection(refreshOwnedItems: boolean?)
 	local ScrollingFrame = self.weaponSelection:FindFirstChild("ScrollingFrame")
 	local Reference = ScrollingFrame:FindFirstChild("Reference")
 	self.lastOwnedItems = table.clone(self.ownedItems)
-	self:UpdateOwnedWeapons()
+	self:UpdateOwnedWeapons(refreshOwnedItems)
 
-	local tablesMatch = false
-	for i, v in ipairs(self.lastOwnedItems) do
-		if v ~= self.ownedItems[i] then
-			tablesMatch = false
-			break
+	local tablesMatch = #self.lastOwnedItems == #self.ownedItems
+	if tablesMatch then
+		for i, v in ipairs(self.lastOwnedItems) do
+			if v ~= self.ownedItems[i] then
+				tablesMatch = false
+				break
+			end
 		end
-		tablesMatch = true
 	end
 
 	-- Only update all our frames if the owned items have changed, otherwise we can just return
 	if not tablesMatch then
-		print("Owned items changed, updating weapon selection")
+		-- print("Owned items changed, updating weapon selection")
 
 		for _, child in ipairs(self.weaponChoices) do
 			child.Button:Destroy()
@@ -661,7 +1119,7 @@ function LoadoutUI:UpdateWeaponSelection()
 			local WeightIndicator = newButton:FindFirstChild("WeightIndicator")
 
 			-- Get item info
-			local itemInfo = RemoteInfo:InvokeServer(ownedItem)
+			local itemInfo = self:GetWeaponInfoCached(ownedItem)
 			if not itemInfo then
 				warn(`No item info for {ownedItem}`)
 				continue
@@ -687,9 +1145,13 @@ function LoadoutUI:UpdateWeaponSelection()
 			self:HookBaseButtonSounds(newButton)
 
 			newButton.MouseButton1Down:Connect(function()
-				print(`Equipping {ownedItem}`)
+				if not self.lastSelectedSlot then
+					return
+				end
 
-				local success, message = self:EquipWeaponToSlot(weaponChoice, self.lastSelectedSlot.SlotIndex)
+				-- print(`Equipping {ownedItem}`)
+
+				local success, message = self:EquipWeaponToSlot(weaponChoice, self.lastSelectedSlot.SlotIndex, true)
 				if success then
 					self:PlaySound("Equip")
 					self.weaponSelection.Visible = false
@@ -697,7 +1159,7 @@ function LoadoutUI:UpdateWeaponSelection()
 					self:HideEstimatedFill()
 				else
 					self:PlaySound("Error")
-					if message == "Weight" then
+					if message == "WeightExceeded" then
 						-- moves it
 						self:ShowEstimatedFill(weaponChoice)
 						self:FlashWeightBar()
@@ -757,7 +1219,7 @@ function LoadoutUI:ShowWeaponSelection()
 
 	-- can be slow
 	task.defer(function()
-		self:UpdateWeaponSelection()
+		self:UpdateWeaponSelection(true)
 	end)
 
 	self.weaponSelectionVisible = true
@@ -796,6 +1258,8 @@ function LoadoutUI:HideWeaponSelection()
 			end
 			self.weaponSelection.Visible = false
 		end)
+	else
+		self.weaponSelection.Visible = false
 	end
 end
 
@@ -929,7 +1393,7 @@ function LoadoutUI:ShowEstimatedFill(weaponChoice: WeaponChoice)
 
 	local existingSlot = self:GetSlotWithWeaponName(weaponChoice.Name)
 	if existingSlot then
-		totalWeight -= addedWeight
+		totalWeight -= self:GetWeightForSlot(existingSlot.SlotIndex)
 	end
 
 	-- if there's a weapon you're replacing in the slot, we need to subtract its weight from the total
@@ -957,7 +1421,7 @@ function LoadoutUI:UpdateWeightBar()
 	local barFill = self.weightBar:FindFirstChild("Fill") :: Frame
 	local weightIcon = self.weightBar:FindFirstChild("WeightIcon") :: ImageLabel
 	local totalWeight = self:GetTotalWeight()
-	print(totalWeight, "/", self.loadoutConfig.maxWeight)
+	-- print(totalWeight, "/", self.loadoutConfig.maxWeight)
 
 	local fillPercentage = totalWeight / self.loadoutConfig.maxWeight
 	barFill:TweenSize(UDim2.new(fillPercentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 0.5, true)
@@ -1028,7 +1492,7 @@ function LoadoutUI:SlotSelected(slotIndex: number)
 
 	self:SetSlotSelected(selectedSlot, true)
 	self.lastSelectedSlot = selectedSlot
-	print(`Slot {slotIndex} selected`)
+	-- print(`Slot {slotIndex} selected`)
 	self:ShowWeaponSelection()
 end
 
@@ -1088,6 +1552,7 @@ function LoadoutUI:Show()
 
 	Camera.CFrame = self.baseCameraCFrame
 
+	self:RefreshLoadoutSelection()
 	self:SetupRenderConnect()
 	showScreen()
 

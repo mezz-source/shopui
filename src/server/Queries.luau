@@ -1,5 +1,6 @@
 local Queries = {}
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local ItemInfo = ServerStorage.ShopStorage:WaitForChild("ItemInfo")
@@ -11,6 +12,9 @@ local DataAPI = require(game.ServerScriptService.DataAPI.API)
 
 local MODULE_INFOS: { [string]: {} } = {}
 local MODULES_BY_CATEGORY: { [string]: { [string]: {} } } = {}
+local OWNED_ITEMS_CACHE_TTL_SECONDS = 2
+local OWNED_ITEMS_CACHE: { [number]: { items: { string }, expiresAt: number } } = {}
+local cleanupBound = false
 
 type Category = ShopTypes.Category
 type Weight = ShopTypes.Weight
@@ -366,11 +370,24 @@ local function getWeaponInfo(weaponNameOrQuery: any, maybeQuery: Query?)
 end
 
 local function getOwnedItems(player: Player): { string }
+	local userId = player.UserId
+	local now = os.clock()
+	local cached = OWNED_ITEMS_CACHE[userId]
+	if cached and cached.expiresAt > now then
+		return table.clone(cached.items)
+	end
+
 	local ownedItems = DataAPI.getPlayerOwnedItems(player)
 	if not ownedItems then
-		return {}
+		ownedItems = {}
 	end
-	return ownedItems
+
+	OWNED_ITEMS_CACHE[userId] = {
+		items = table.clone(ownedItems),
+		expiresAt = now + OWNED_ITEMS_CACHE_TTL_SECONDS,
+	}
+
+	return table.clone(ownedItems)
 end
 
 local function getWeaponInfoInvoke(firstArg: any, secondArg: any, thirdArg: any)
@@ -452,6 +469,13 @@ local function getMeleeSettingsInvoke(_, firstArg: any)
 end
 
 function Queries.load()
+	if not cleanupBound then
+		cleanupBound = true
+		Players.PlayerRemoving:Connect(function(player: Player)
+			OWNED_ITEMS_CACHE[player.UserId] = nil
+		end)
+	end
+
 	for _, module in ipairs(ItemInfo:GetChildren()) do
 		getInfo(module.Name)
 	end
@@ -462,9 +486,9 @@ function Queries.load()
 	ShopRemotes.GetGunSettings.OnServerInvoke = getGunSettingInvoke
 	ShopRemotes.GetMeleeSettings.OnServerInvoke = getMeleeSettingsInvoke
 
-	ShopBindables.GetPlayerOwnedItems.OnInvoke = getOwnedItems
-	ShopBindables.GetWeaponInfo.OnInvoke = getWeaponInfoInvoke
-	ShopBindables.GetAllInfoForCategory.OnInvoke = getAllInfoForCategoryInvoke
+	ShopBindables:WaitForChild("GetPlayerOwnedItems").OnInvoke = getOwnedItems
+	ShopBindables:WaitForChild("GetWeaponInfo").OnInvoke = getWeaponInfoInvoke
+	ShopBindables:WaitForChild("GetAllInfoForCategory").OnInvoke = getAllInfoForCategoryInvoke
 end
 
 return Queries

@@ -18,6 +18,8 @@ type LoadoutConfig = ShopTypes.LoadoutConfig
 type WeaponInfo = ShopTypes.WeaponInfo
 
 local itemInfoLibrary: { [string]: WeaponInfo } = {}
+local MAX_LOADOUT_NAME_LENGTH = 32
+local MAX_PLAYER_LOADOUTS = 25
 
 local function getLoadoutConfig(): LoadoutConfig
 	local gamemode = workspace:GetAttribute("Gamemode")
@@ -30,13 +32,47 @@ local function getLoadoutConfig(): LoadoutConfig
 end
 
 local function textIsModerated(fromPlayer: Player, text: string): boolean
-	local filteredString = TextService:FilterStringAsync(text, fromPlayer.UserId)
-	return filteredString ~= text
+	local success, result = pcall(function()
+		local filteredString = TextService:FilterStringAsync(text, fromPlayer.UserId) :: TextFilterResult
+		local finalString = filteredString:GetNonChatStringForBroadcastAsync()
+		return finalString ~= text
+	end)
+
+	if not success then
+		warn(`Text moderation check failed for loadout name: {result}`)
+		return true
+	end
+
+	return result
+end
+
+local function trimString(value: string): string
+	return string.gsub(value, "^%s*(.-)%s*$", "%1")
+end
+
+local function validateLoadoutName(loadoutName: string): { Success: boolean, Reason: string? }
+	local trimmed = trimString(loadoutName)
+	if trimmed == "" then
+		return { Success = false, Reason = "Loadout name cannot be empty" }
+	end
+
+	if string.len(trimmed) > MAX_LOADOUT_NAME_LENGTH then
+		return {
+			Success = false,
+			Reason = `Loadout name cannot exceed {MAX_LOADOUT_NAME_LENGTH} characters`,
+		}
+	end
+
+	if not string.match(trimmed, "^[%w _%-]+$") then
+		return { Success = false, Reason = "Loadout name contains unsupported characters" }
+	end
+
+	return { Success = true, Reason = nil }
 end
 
 local function loadInfoLibrary()
-	local gunLibrary = GetAllInfoForCategory:Invoke("Guns")
-	local meleeLibrary = GetAllInfoForCategory:Invoke("Melees")
+	local gunLibrary = GetAllInfoForCategory:Invoke("Gun")
+	local meleeLibrary = GetAllInfoForCategory:Invoke("Melee")
 	local armorLibrary = GetAllInfoForCategory:Invoke("Armor")
 
 	for gunName, gunInfo in pairs(gunLibrary) do
@@ -96,9 +132,19 @@ function Loadouts.validateLoadout(
 	loadout: Loadout
 ): { Success: boolean, Reason: string? }
 	-- Layer 1 -- check to see if they own what they say they do, no duplicates, no invalid items, etc.
+	-- Also no new empty loadouts
+	if #loadout == 0 then
+		return { Success = false, Reason = "Loadout cannot be empty" }
+	end
+
 	local playerOwnedItems = getPlayerOwnedItems(player)
 	local seenItems = {}
 	for number, itemName in ipairs(loadout) do
+		-- Nothing there, nothing to worry about
+		if itemName == "None" then
+			continue
+		end
+
 		if seenItems[itemName] then
 			return { Success = false, Reason = "Duplicate item found: " .. itemName }
 		end
@@ -128,14 +174,20 @@ function Loadouts.validateLoadout(
 		return { Success = false, Reason = "Loadout exceeds maximum weight" }
 	end
 
-	return { Success = true, Reason = nil }
+	return { Success = true, Reason = nil } -- TODO: bully the data API Into saving it
+	-- also integrate overwriting existing ones
 end
 
 local function serverLoadoutInvoke(
 	player: Player,
 	loadoutName: string,
 	loadout: Loadout
-): { Success: boolean, Reason: string? }
+): {
+	Success: boolean,
+	Reason: string?,
+	Loadouts: { [string]: Loadout }?,
+	ActiveLoadout: string?,
+}
 	-- Verify the types, and that each one makes sense
 	-- if they don't match, very likely tamper
 	if typeof(loadoutName) ~= "string" then
@@ -152,19 +204,95 @@ local function serverLoadoutInvoke(
 		end
 	end
 
+	local nameValidation = validateLoadoutName(loadoutName)
+	if not nameValidation.Success then
+		return nameValidation
+	end
+
+	local trimmedName = trimString(loadoutName)
+
 	-- Make sure the name isnt moderated
-	if textIsModerated(player, loadoutName) then
+	if textIsModerated(player, trimmedName) then
 		return { Success = false, Reason = "Loadout name was moderated" }
 	end
 
 	-- Validate the actual logic of the loadout last
-	return Loadouts.validateLoadout(player, loadoutName, loadout)
+	local validationResult = Loadouts.validateLoadout(player, trimmedName, loadout)
+	if not validationResult.Success then
+		return validationResult
+	end
+
+	return DataAPI.upsertPlayerLoadout(player, trimmedName, loadout, MAX_PLAYER_LOADOUTS)
+end
+
+local function getPlayerLoadoutsInvoke(player: Player): {
+	Success: boolean,
+	Reason: string?,
+	Loadouts: { [string]: Loadout }?,
+	ActiveLoadout: string?,
+}
+	return DataAPI.getPlayerLoadoutsResult(player)
+end
+
+local function removePlayerLoadoutInvoke(player: Player, loadoutName: string): { Success: boolean, Reason: string? }
+	if typeof(loadoutName) ~= "string" then
+		return { Success = false, Reason = "Invalid loadout name" }
+	end
+
+	if loadoutName == "Default" then
+		return { Success = false, Reason = "Cannot remove the default loadout" }
+	end
+
+	local nameValidation = validateLoadoutName(loadoutName)
+	if not nameValidation.Success then
+		return nameValidation
+	end
+
+	return DataAPI.removePlayerLoadout(player, trimString(loadoutName))
+end
+
+local function setActiveLoadoutInvoke(
+	player: Player,
+	loadoutName: string
+): { Success: boolean, Reason: string?, ActiveLoadout: string? }
+	if typeof(loadoutName) ~= "string" then
+		return { Success = false, Reason = "Invalid loadout name" }
+	end
+
+	local nameValidation = validateLoadoutName(loadoutName)
+	if not nameValidation.Success then
+		return { Success = false, Reason = nameValidation.Reason }
+	end
+
+	local trimmedName = trimString(loadoutName)
+	local setActiveSuccess = DataAPI.setPlayerActiveLoadout(player, trimmedName)
+	if not setActiveSuccess then
+		return { Success = false, Reason = "Failed to set active loadout" }
+	end
+
+	return { Success = true, ActiveLoadout = trimmedName }
 end
 
 function Loadouts.load()
 	loadInfoLibrary()
 
 	ShopRemotes.ValidateLoadout.OnServerInvoke = serverLoadoutInvoke
+	ShopRemotes.GetPlayerLoadouts.OnServerInvoke = getPlayerLoadoutsInvoke
+	ShopRemotes.RemoveLoadout.OnServerInvoke = removePlayerLoadoutInvoke
+
+	local setActiveRemote = ShopRemotes:FindFirstChild("SetActiveLoadout")
+	if setActiveRemote and setActiveRemote:IsA("RemoteFunction") then
+		setActiveRemote.OnServerInvoke = setActiveLoadoutInvoke
+	else
+		warn("ShopRemotes.SetActiveLoadout RemoteFunction is missing")
+	end
+
+	local setActiveBindable = ShopBindables:FindFirstChild("SetActiveLoadout")
+	if setActiveBindable and setActiveBindable:IsA("BindableFunction") then
+		setActiveBindable.OnInvoke = setActiveLoadoutInvoke
+	else
+		warn("ShopBindables.SetActiveLoadout BindableFunction is missing")
+	end
 
 	print("Loaded shop loadouts system")
 end

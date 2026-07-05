@@ -159,6 +159,57 @@ local function shouldBeLocked(requiredLevel: number, requiredMoney: number): { i
 	return { isUnlocked = Unlocked, reason = Reason }
 end
 
+local function hasBadgeUnlocked(_badgeTag: string): boolean
+	-- Stubbed for now; replace with your badge ownership logic.
+	return false
+end
+
+local function isInRequiredGroup(groupId: number): boolean
+	local success, isInGroup = pcall(function()
+		return Player:IsInGroup(groupId)
+	end)
+
+	if not success then
+		warn("Failed to check group requirement for group ID", groupId)
+		return false
+	end
+
+	return isInGroup
+end
+
+local function getRequirementLockState(weaponInfo: WeaponInfo): { isUnlocked: boolean, lockText: string }
+	local badgeTag = weaponInfo.BadgeTag
+	local groupId = weaponInfo.GroupId
+
+	if badgeTag == nil and groupId == nil then
+		return { isUnlocked = true, lockText = "" }
+	end
+
+	local badgeUnlocked = false
+	if badgeTag ~= nil and badgeTag ~= "" then
+		badgeUnlocked = hasBadgeUnlocked(badgeTag)
+	end
+
+	local groupUnlocked = false
+	if groupId ~= nil and groupId > 0 then
+		groupUnlocked = isInRequiredGroup(groupId)
+	end
+
+	if badgeUnlocked or groupUnlocked then
+		return { isUnlocked = true, lockText = "" }
+	end
+
+	if badgeTag ~= nil and badgeTag ~= "" and groupId ~= nil and groupId > 0 then
+		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag .. " OR GROUP ONLY" }
+	end
+
+	if badgeTag ~= nil and badgeTag ~= "" then
+		return { isUnlocked = false, lockText = "REQUIRES BADGE " .. badgeTag }
+	end
+
+	return { isUnlocked = false, lockText = "GROUP ONLY" }
+end
+
 function ShopUI.new(
 	shopModelName: string?,
 	options: { gui: Instance?, autoStart: boolean?, onExitRequested: (() -> ())? }?
@@ -417,6 +468,7 @@ function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
 	local cost = weaponFrame.Cost :: TextLabel
 	local level = weaponFrame.Level :: TextLabel
 	local image = weaponFrame.ImageLabel :: ImageLabel
+	cost.Text = "※ " .. weaponInfo.Price
 
 	if self:OwnsWeapon(weaponInfo.Name) then
 		title.BackgroundColor3 = Color3.new(0.062745, 0.2, 0.062745)
@@ -428,6 +480,15 @@ function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
 		return
 	else
 		title.TextColor3 = Color3.new(0, 0, 0)
+	end
+
+	local requirementLockState = getRequirementLockState(weaponInfo)
+	if not requirementLockState.isUnlocked then
+		cost.Text = requirementLockState.lockText
+		cost.TextColor3 = Color3.new(1, 0, 0)
+		image.ImageTransparency = 0.5
+		title.BackgroundColor3 = Color3.new(1, 0, 0)
+		return
 	end
 
 	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
@@ -457,6 +518,13 @@ function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
 	if self:OwnsWeapon(weaponInfo.Name) then
 		self.PurchaseButton.Text = "OWNED"
 		self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
+		return
+	end
+
+	local requirementLockState = getRequirementLockState(weaponInfo)
+	if not requirementLockState.isUnlocked then
+		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
+		self.PurchaseButton.Text = requirementLockState.lockText
 		return
 	end
 
@@ -920,6 +988,14 @@ function ShopUI:PurchaseCurrentItem()
 	local isOwned = self:OwnsWeapon(selectedWeaponName)
 	if isOwned then
 		warn("Purchase failed:", "Already owned")
+		self:PlaySound("Error")
+		return
+	end
+
+	-- We can initially validate it ourselves
+	local requirementLockState = getRequirementLockState(weaponInfo)
+	if not requirementLockState.isUnlocked then
+		warn("Purchase failed:", requirementLockState.lockText)
 		self:PlaySound("Error")
 		return
 	end

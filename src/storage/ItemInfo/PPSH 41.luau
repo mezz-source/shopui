@@ -8,6 +8,7 @@ return {
 	SpecialText = "",
 	GroupUnlocked = false,
 	Consumable = false,
+	BadgeTag = "EXAMPLE",
 	PreviewImage = "rbxassetid://134498040939435",
 
 	ItemInfo = {
