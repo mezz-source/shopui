@@ -6,18 +6,12 @@
     "ReplicatedStorage": {
       "ShopClient": {
         "$path": "src/shared"
-      },
-      "AdaptiveMusic": {
-        "$path": "src/adaptive"
       }
     },
 
     "ServerScriptService": {
       "ShopServer": {
         "$path": "src/server"
-      },
-      "DataAPI": {
-        "$path": "src/data"
       }
     },
 

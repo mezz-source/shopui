@@ -122,6 +122,18 @@ export type GunSettings = {
 	FieldOfViewIS: number,
 }
 
+export type InfoLibrary = {
+	getWeaponInfo: (name: string) -> WeaponInfo?,
+	getAllForCategory: (category: Category) -> { WeaponInfo },
+	queryWeapons: (category: Category, weights: { Weight }?) -> { WeaponInfo },
+	getGunSettings: (name: string) -> GunSettings?,
+	getMeleeSettings: (name: string) -> MeleeInfo?,
+	getOwnedItems: () -> { string },
+	isOwned: (name: string) -> boolean,
+	refreshOwnedItems: () -> { string },
+	registerOwnedItem: (name: string) -> (),
+}
+
 export type ShopQuery = {
 	category: Category?,
 	weights: Weight | { Weight }?,

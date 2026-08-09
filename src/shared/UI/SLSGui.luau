@@ -10,6 +10,13 @@ local ShopUI = require(ReplicatedStorage.ShopClient.UI.Shop)
 local LoadoutUI = require(ReplicatedStorage.ShopClient.UI.Loadout)
 local StatsUI = require(ReplicatedStorage.ShopClient.UI.Stats)
 local AdaptiveMusic = require(ReplicatedStorage.AdaptiveMusic.AdaptiveSong)
+local ShopTypes = require(ReplicatedStorage.ShopClient.ShopTypes)
+local InvokeLogger = require(ReplicatedStorage.ShopClient.InvokeLogger)
+
+local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
+local RemoteInfoAll = Remotes:WaitForChild("GetAllInfoForCategory")
+local GetGunSettings = Remotes:WaitForChild("GetGunSettings")
+local GetMeleeSettings = Remotes:WaitForChild("GetMeleeSettings")
 
 local SLSGui = {}
 SLSGui.__index = SLSGui
@@ -32,6 +39,50 @@ type SLSGuiOptions = {
 }
 
 local CLOSE_FADE_DURATION = 1
+
+local staticWeaponInfos: { [string]: ShopTypes.WeaponInfo } = {}
+local staticGunSettings: { [string]: ShopTypes.GunSettings } = {}
+local staticMeleeSettings: { [string]: ShopTypes.MeleeInfo } = {}
+local staticOwnedItems: { string } = {}
+local staticLoadComplete = false
+
+task.spawn(function()
+	local allGunInfos = InvokeLogger.invokeServer(RemoteInfoAll, { category = "Gun" }) :: { ShopTypes.WeaponInfo }?
+	local allMeleeInfos = InvokeLogger.invokeServer(RemoteInfoAll, { category = "Melee" }) :: { ShopTypes.WeaponInfo }?
+
+	if allGunInfos then
+		for _, info in ipairs(allGunInfos) do
+			staticWeaponInfos[info.Name] = info
+		end
+	end
+
+	if allMeleeInfos then
+		for _, info in ipairs(allMeleeInfos) do
+			staticWeaponInfos[info.Name] = info
+		end
+	end
+
+	for name, info in pairs(staticWeaponInfos) do
+		if info.Category == "Gun" then
+			local settings = InvokeLogger.invokeServer(GetGunSettings, name) :: ShopTypes.GunSettings?
+			if settings then
+				staticGunSettings[name] = settings
+			end
+		elseif info.Category == "Melee" then
+			local settings = InvokeLogger.invokeServer(GetMeleeSettings, name) :: ShopTypes.MeleeInfo?
+			if settings then
+				staticMeleeSettings[name] = settings
+			end
+		end
+	end
+
+	local ownedResult = InvokeLogger.invokeServer(Remotes:WaitForChild("GetOwnedItems"))
+	if typeof(ownedResult) == "table" then
+		staticOwnedItems = ownedResult
+	end
+
+	staticLoadComplete = true
+end)
 
 local function hideCoreGui()
 	local success, err = pcall(function(...)
@@ -143,6 +194,7 @@ function SLSGui.new(options: SLSGuiOptions?)
 	self.shopModelName = if options then options.shopModelName else nil
 	self.startState = if options and options.startState then options.startState else "Shop"
 	self.sounds = {}
+	self.infoLibrary = nil
 	self.main.OptionsMain.Position = UDim2.new(0.5, 0, -2, 0)
 
 	self.song = AdaptiveMusic.new("RunningOnDeadTime", false)
@@ -229,6 +281,82 @@ function SLSGui:HookBaseButtonSounds(button: TextButton | ImageButton, scaleModi
 	end)
 end
 
+function SLSGui:CollectInfoLibrary(): ShopTypes.InfoLibrary
+	while not staticLoadComplete do
+		task.wait()
+	end
+
+	local library: ShopTypes.InfoLibrary = {}
+
+	function library.getWeaponInfo(name: string): ShopTypes.WeaponInfo?
+		return staticWeaponInfos[name]
+	end
+
+	function library.getAllForCategory(category: ShopTypes.Category): { ShopTypes.WeaponInfo }
+		local result = {}
+		for _, info in pairs(staticWeaponInfos) do
+			if info.Category == category then
+				table.insert(result, info)
+			end
+		end
+		return result
+	end
+
+	function library.queryWeapons(
+		category: ShopTypes.Category,
+		weights: { ShopTypes.Weight }?
+	): { ShopTypes.WeaponInfo }
+		local result = {}
+		for _, info in pairs(staticWeaponInfos) do
+			if info.Category == category then
+				if weights == nil or #weights == 0 then
+					table.insert(result, info)
+				else
+					for _, w in ipairs(weights) do
+						if info.Weight == w then
+							table.insert(result, info)
+							break
+						end
+					end
+				end
+			end
+		end
+		return result
+	end
+
+	function library.getGunSettings(name: string): ShopTypes.GunSettings?
+		return staticGunSettings[name]
+	end
+
+	function library.getMeleeSettings(name: string): ShopTypes.MeleeInfo?
+		return staticMeleeSettings[name]
+	end
+
+	function library.getOwnedItems(): { string }
+		return table.clone(staticOwnedItems)
+	end
+
+	function library.isOwned(name: string): boolean
+		return table.find(staticOwnedItems, name) ~= nil
+	end
+
+	function library.refreshOwnedItems(): { string }
+		local result = InvokeLogger.invokeServer(Remotes:WaitForChild("GetOwnedItems"))
+		if typeof(result) == "table" then
+			staticOwnedItems = result
+		end
+		return table.clone(staticOwnedItems)
+	end
+
+	function library.registerOwnedItem(name: string)
+		if table.find(staticOwnedItems, name) == nil then
+			table.insert(staticOwnedItems, name)
+		end
+	end
+
+	return library
+end
+
 function SLSGui:Start(initialState: SLSState?)
 	if self.started then
 		if initialState then
@@ -260,6 +388,13 @@ function SLSGui:Start(initialState: SLSState?)
 	if not success then
 		warn(err)
 	end
+
+	self.infoLibrary = self:CollectInfoLibrary()
+
+	if self.shop then
+		self.shop.infoLibrary = self.infoLibrary
+	end
+	self.loadout.infoLibrary = self.infoLibrary
 
 	self.song:Play()
 

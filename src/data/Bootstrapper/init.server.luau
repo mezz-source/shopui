@@ -1,6 +1,0 @@
-local ServerScriptService = game:GetService("ServerScriptService")
-local DataAPI = ServerScriptService:WaitForChild("DataAPI")
-local Core = require(DataAPI.Core)
-local Manager = require(DataAPI.Manager)
-Core.start()
-Manager.start()

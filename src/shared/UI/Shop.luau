@@ -7,15 +7,14 @@ local Player = Players.LocalPlayer
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
+local MarketplaceService = game:GetService("MarketplaceService")
 local GUIs = ReplicatedStorage:WaitForChild("GUIs")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
-local RemoteInfo = Remotes:WaitForChild("GetWeaponInfo")
-local RemoteInfoAll = Remotes:WaitForChild("GetAllInfoForCategory")
-local GetGunSettings = Remotes:WaitForChild("GetGunSettings")
-local GetMeleeSettings = Remotes:WaitForChild("GetMeleeSettings")
+
+local BadgeManager = require(game.ReplicatedFirst.Modules.BadgeManager)
 
 local WeaponPreviews = ReplicatedStorage:WaitForChild("WeaponPreview")
 
@@ -25,7 +24,7 @@ local GunScoring = require(script.Parent.Parent.GunScoring)
 local MeleeScoring = require(script.Parent.Parent.MeleeScoring)
 local InvokeLogger = require(script.Parent.Parent.InvokeLogger)
 
-local Shops = workspace:WaitForChild("Shops")
+local Shops = workspace:WaitForChild("Shops", 10000)
 
 type Category = ShopTypes.Category
 type Weight = ShopTypes.Weight
@@ -105,26 +104,6 @@ local function _getShopInfo(shopName: string): ShopInfo
 	return require(info)
 end
 
-local function _getWeaponInfo(weaponName: string): WeaponInfo?
-	return InvokeLogger.invokeServer(RemoteInfo, weaponName)
-end
-
-local function _getAllWeaponInfosForCategory(category: Category): { WeaponInfo }
-	local infos = InvokeLogger.invokeServer(RemoteInfoAll, { category = category })
-	if not infos then
-		warn("No info provided")
-	end
-	return infos or {}
-end
-
-local function _queryAllWeapons(queryTable): { WeaponInfo }
-	local infos = InvokeLogger.invokeServer(RemoteInfoAll, queryTable)
-	if not infos then
-		warn("No info provided")
-	end
-	return infos or {}
-end
-
 local function lockCamera()
 	Camera.CameraType = Enum.CameraType.Scriptable
 end
@@ -190,9 +169,12 @@ local function shouldBeLocked(requiredLevel: number, requiredMoney: number): { i
 	return { isUnlocked = Unlocked, reason = Reason }
 end
 
+local function hasGamepassUnlocked(_gamepassId: number): boolean
+	return MarketplaceService:UserOwnsGamePassAsync(Player.UserId, _gamepassId)
+end
+
 local function hasBadgeUnlocked(_badgeTag: string): boolean
-	-- Stubbed for now; replace with your badge ownership logic.
-	return true
+	return BadgeManager.userOwnsBadgeTag(Player, _badgeTag)
 end
 
 local function isInRequiredGroup(groupId: number): boolean
@@ -259,6 +241,7 @@ function ShopUI.new(
 	self.started = false
 	self.onExitRequested = if shopOptions then shopOptions.onExitRequested else nil
 	self.shopInfo = nil
+	self.infoLibrary = nil
 
 	self.CameraPart = nil
 	self.ShopModel = nil
@@ -417,20 +400,19 @@ function ShopUI:Start()
 end
 
 function ShopUI:UpdateOwnedWeapons()
-	local ownedItems = InvokeLogger.invokeServer(Remotes.GetOwnedItems) :: { string }
-	if not ownedItems then
-		warn("No owned items provided")
+	if not self.infoLibrary then
 		return
 	end
-
-	self.ownedItems = ownedItems
+	self.ownedItems = self.infoLibrary.getOwnedItems()
 end
 
 function ShopUI:RegisterOwnedItem(weaponName: string)
+	if self.infoLibrary then
+		self.infoLibrary.registerOwnedItem(weaponName)
+	end
 	if table.find(self.ownedItems, weaponName) ~= nil then
 		return
 	end
-
 	table.insert(self.ownedItems, weaponName)
 end
 
@@ -501,6 +483,9 @@ function ShopUI:UpdateCurrencyDisplay(targetAmount: number)
 end
 
 function ShopUI:OwnsWeapon(weaponName: string): boolean
+	if self.infoLibrary then
+		return self.infoLibrary.isOwned(weaponName)
+	end
 	return table.find(self.ownedItems, weaponName) ~= nil
 end
 
@@ -542,22 +527,42 @@ function ShopUI:ApplyWeaponFrameState(weaponFrame, weaponInfo: WeaponInfo)
 		level.TextColor3 = Color3.new(0, 1, 0)
 		image.ImageColor3 = Color3.new(0, 1, 0)
 		image.ImageTransparency = 0.5
+
+		if workspace:GetAttribute("Gamemode") == "Sandbox" then
+			cost.Visible = false
+			level.Visible = false
+		end
+
 		return
 	else
 		title.TextColor3 = Color3.new(0, 0, 0)
 	end
 
-	local requirementLockState = getRequirementLockState(weaponInfo)
-	if not requirementLockState.isUnlocked then
-		cost.Text = requirementLockState.lockText
-		cost.TextColor3 = Color3.new(1, 0, 0)
-		image.ImageTransparency = 0.5
-		title.BackgroundColor3 = Color3.new(1, 0, 0)
-		return
+	local userOwnsGamepass = false
+
+	-- Gamepasses override lock states
+	if weaponInfo.GamepassId then
+		userOwnsGamepass = hasGamepassUnlocked(weaponInfo.GamepassId)
+	end
+
+	if userOwnsGamepass then
+		cost.Text = "AVAILABLE TO BUY"
+		cost.TextColor3 = Color3.new(0, 1, 0)
+	end
+
+	if not userOwnsGamepass then
+		local requirementLockState = getRequirementLockState(weaponInfo)
+		if not requirementLockState.isUnlocked then
+			cost.Text = requirementLockState.lockText
+			cost.TextColor3 = Color3.new(1, 0, 0)
+			image.ImageTransparency = 0.5
+			title.BackgroundColor3 = Color3.new(1, 0, 0)
+			return
+		end
 	end
 
 	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
-	if result.isUnlocked then
+	if result.isUnlocked or userOwnsGamepass then
 		return
 	end
 
@@ -584,21 +589,32 @@ function ShopUI:ApplySelectedWeaponState(weaponInfo: WeaponInfo)
 		self.PurchaseButton.Text = "FREE"
 	end
 
+	local userOwnsGamepass = false
+	if weaponInfo.GamepassId then
+		userOwnsGamepass = hasGamepassUnlocked(weaponInfo.GamepassId)
+	end
+
 	if self:OwnsWeapon(weaponInfo.Name) then
 		self.PurchaseButton.Text = "OWNED"
 		self.PurchaseButton.BackgroundColor3 = Color3.new(0.4, 0.4, 0.4)
 		return
 	end
 
-	local requirementLockState = getRequirementLockState(weaponInfo)
-	if not requirementLockState.isUnlocked then
-		self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
-		self.PurchaseButton.Text = requirementLockState.lockText
-		return
+	if userOwnsGamepass then
+		self.PurchaseButton.Text = "FREE"
+	end
+
+	if not userOwnsGamepass then
+		local requirementLockState = getRequirementLockState(weaponInfo)
+		if not requirementLockState.isUnlocked then
+			self.PurchaseButton.BackgroundColor3 = Color3.new(1, 0, 0)
+			self.PurchaseButton.Text = requirementLockState.lockText
+			return
+		end
 	end
 
 	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
-	if result.isUnlocked then
+	if result.isUnlocked or userOwnsGamepass then
 		return
 	end
 
@@ -683,7 +699,7 @@ end
 function ShopUI:SetupWeaponPreview(weaponName: string)
 	self:ClearWeaponPreview()
 
-	local weaponInfo = _getWeaponInfo(weaponName)
+	local weaponInfo = if self.infoLibrary then self.infoLibrary.getWeaponInfo(weaponName) else nil
 
 	local model = WeaponPreviews:FindFirstChild(weaponName)
 	if not model then
@@ -793,7 +809,7 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 	end
 
 	if weaponInfo.Category == "Gun" then
-		local gunInfo = InvokeLogger.invokeServer(GetGunSettings, weaponInfo.Name) :: GunInfo
+		local gunInfo = if self.infoLibrary then self.infoLibrary.getGunSettings(weaponInfo.Name) else nil :: GunInfo
 		if not gunInfo then
 			warn("No gun info", weaponInfo.Name)
 			return
@@ -821,7 +837,7 @@ function ShopUI:LoadStats(weaponInfo: WeaponInfo)
 		local damageColor = DAMAGE_TYPE_TO_COLOR[damageType] or Color3.new(1, 1, 0)
 		createPill(damageType, damageColor)
 	elseif weaponInfo.Category == "Melee" then
-		local meleeInfo = InvokeLogger.invokeServer(GetMeleeSettings, weaponInfo.Name) :: MeleeInfo
+		local meleeInfo = if self.infoLibrary then self.infoLibrary.getMeleeSettings(weaponInfo.Name) else nil :: MeleeInfo
 		if not meleeInfo then
 			warn("No melee info", weaponInfo.Name)
 			return
@@ -858,7 +874,7 @@ function ShopUI:SelectWeapon(weaponName: string)
 		return
 	end
 
-	local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
+	local weaponInfo = (if self.infoLibrary then self.infoLibrary.getWeaponInfo(weaponName) else nil) :: WeaponInfo
 	if not weaponInfo then
 		warn("No weapon info", weaponName)
 		return
@@ -890,10 +906,9 @@ function ShopUI:SelectFilter(filterType: "Weight", filter)
 	self.currentFilterName = filter
 
 	if filterType == "Weight" then
-		local info = _queryAllWeapons({
-			category = self.shopInfo.Category,
-			weights = filter,
-		})
+		local info = if self.infoLibrary
+			then self.infoLibrary.queryWeapons(self.shopInfo.Category, { filter })
+			else {}
 		self:LoadWeaponInfos(info)
 	else
 		warn("unimplemented", filterType)
@@ -927,7 +942,7 @@ function ShopUI:UpdateWeaponInfos()
 	for _, infoFrame in ipairs(self.currentWeaponInfoButtons) do
 		local title = infoFrame.Title :: TextLabel
 		local weaponName = title.Text
-		local weaponInfo = _getWeaponInfo(weaponName) :: WeaponInfo
+		local weaponInfo = (if self.infoLibrary then self.infoLibrary.getWeaponInfo(weaponName) else nil) :: WeaponInfo
 		if not weaponInfo then
 			warn("No weapon info", weaponName)
 			continue
@@ -1076,7 +1091,7 @@ function ShopUI:PurchaseCurrentItem()
 	end
 
 	local selectedWeaponName = self.currentWeaponName or self.WeaponInfo.WeaponTitle.Text
-	local weaponInfo = _getWeaponInfo(selectedWeaponName)
+	local weaponInfo = if self.infoLibrary then self.infoLibrary.getWeaponInfo(selectedWeaponName) else nil
 	if not weaponInfo then
 		warn("No weapon info for", selectedWeaponName)
 		return
@@ -1089,17 +1104,23 @@ function ShopUI:PurchaseCurrentItem()
 		return
 	end
 
-	-- We can initially validate it ourselves
-	local requirementLockState = getRequirementLockState(weaponInfo)
-	if not requirementLockState.isUnlocked then
-		warn("Purchase failed:", requirementLockState.lockText)
-		self:PlaySound("Error")
-		return
+	local ownsGamepass = false
+	if weaponInfo.GamepassId then
+		ownsGamepass = hasGamepassUnlocked(weaponInfo.GamepassId)
 	end
 
-	-- We can initially validate it ourselves
+	if not ownsGamepass then
+		-- We can initially validate it ourselves
+		local requirementLockState = getRequirementLockState(weaponInfo)
+		if not requirementLockState.isUnlocked then
+			warn("Purchase failed:", requirementLockState.lockText)
+			self:PlaySound("Error")
+			return
+		end
+	end
+
 	local result = shouldBeLocked(weaponInfo.Level, weaponInfo.Price)
-	if not result["isUnlocked"] then
+	if not result["isUnlocked"] and not ownsGamepass then
 		warn("Purchase failed:", "Not unlocked")
 		self:PlaySound("Error")
 		return
@@ -1198,7 +1219,6 @@ function ShopUI:Init()
 	self:UpdateOwnedWeapons()
 	self:Show(true)
 
-	_getAllWeaponInfosForCategory(self.shopInfo.Category)
 	self:SelectFilterByIndex(1)
 end
 

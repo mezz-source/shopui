@@ -15,7 +15,6 @@ local Camera = workspace.CurrentCamera
 local Player = Players.LocalPlayer
 
 local Remotes = ReplicatedStorage:WaitForChild("ShopRemotes")
-local RemoteInfo = Remotes:WaitForChild("GetWeaponInfo")
 local GetPlayerLoadouts = Remotes:WaitForChild("GetPlayerLoadouts")
 local ValidateLoadout = Remotes:WaitForChild("ValidateLoadout")
 local RemoveLoadout = Remotes:WaitForChild("RemoveLoadout")
@@ -33,8 +32,6 @@ local InvokeLogger = require(script.Parent.Parent.InvokeLogger)
 
 local CAMERA_MOUSE_INFLUENCE = 0.24
 local CAMERA_LERP_ALPHA = 0.01
-local WEAPON_INFO_CACHE_TTL_SECONDS = 180
-local OWNED_ITEMS_CACHE_TTL_SECONDS = 2
 
 type WeaponSlot = ShopTypes.WeaponSlot
 type WeaponChoice = ShopTypes.WeaponChoice
@@ -736,18 +733,14 @@ function LoadoutUI.new(loadoutGui: Instance?, options: LoadoutUIOptions?)
 	self.exitButton = nil
 	self.isShowing = false
 	self.alive = true
+	self.infoLibrary = nil
 	self.loadoutCharacter = LoadoutCharacterRef:Clone()
 	self.loadoutCharacter.Parent = workspace
 	self.loadoutConfig = getLoadoutConfig()
 	self.sounds = {}
 	self.weaponSlots = {}
 	self.ownedItems = {}
-	self.ownedItemsCache = {
-		items = {} :: { string },
-		expiresAt = 0,
-	}
 	self.weaponChoices = {}
-	self.weaponInfoCache = {} :: { [string]: { info: ShopTypes.WeaponInfo, expiresAt: number } }
 
 	-- TODO: Implement "Custom" loadout switch
 	-- The user can load a loadout, change something, then reslect it
@@ -858,58 +851,20 @@ function LoadoutUI:Init()
 end
 
 function LoadoutUI:GetWeaponInfoCached(weaponName: string, forceRefresh: boolean?): ShopTypes.WeaponInfo?
-	local now = os.clock()
-	local cached = self.weaponInfoCache[weaponName]
-	if not forceRefresh and cached and cached.expiresAt > now then
-		return cached.info
+	if self.infoLibrary then
+		return self.infoLibrary.getWeaponInfo(weaponName)
 	end
-
-	local ok, itemInfo = pcall(function()
-		return InvokeLogger.invokeServer(RemoteInfo, weaponName)
-	end)
-
-	if not ok then
-		warn(`Failed to get item info for {weaponName}: {itemInfo}`)
-		return nil
-	end
-
-	if not itemInfo then
-		return nil
-	end
-
-	self.weaponInfoCache[weaponName] = {
-		info = itemInfo,
-		expiresAt = now + WEAPON_INFO_CACHE_TTL_SECONDS,
-	}
-
-	return itemInfo
+	return nil
 end
 
 function LoadoutUI:GetOwnedItemsCached(forceRefresh: boolean?): { string }
-	local now = os.clock()
-	local cache = self.ownedItemsCache
-	if not forceRefresh and cache.expiresAt > now then
-		return table.clone(cache.items)
+	if self.infoLibrary then
+		if forceRefresh then
+			return self.infoLibrary.refreshOwnedItems()
+		end
+		return self.infoLibrary.getOwnedItems()
 	end
-
-	local ok, ownedItems = pcall(function()
-		return InvokeLogger.invokeServer(Remotes.GetOwnedItems)
-	end)
-
-	if not ok then
-		warn(`Failed to get owned items: {ownedItems}`)
-		return table.clone(cache.items)
-	end
-
-	if typeof(ownedItems) ~= "table" then
-		warn("No owned items provided")
-		return table.clone(cache.items)
-	end
-
-	cache.items = table.clone(ownedItems)
-	cache.expiresAt = now + OWNED_ITEMS_CACHE_TTL_SECONDS
-
-	return table.clone(cache.items)
+	return table.clone(self.ownedItems)
 end
 
 function LoadoutUI:InitFrameInstances()

@@ -1,13 +1,17 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+
+local musicController = SoundService:WaitForChild("musicController")
 
 local LocalPlayer = Players.LocalPlayer
 
 local Zone = require(ReplicatedStorage.Zone.Zone)
 local SLSGui = require(ReplicatedStorage.ShopClient.UI.SLSGui)
 
-local Shops = workspace:WaitForChild("Shops")
-local LoadoutAreas = workspace:WaitForChild("LoadoutAreas")
+local Shops = workspace:WaitForChild("Shops", 1000)
+local LoadoutAreas = workspace:WaitForChild("LoadoutAreas", 1000)
 
 ReplicatedStorage.Datastore.LoadClientData:FireServer()
 
@@ -18,6 +22,11 @@ local isInShop = false
 local canEnterShop = true
 
 local ENTER_DELAY = 0.1
+
+local function setOtherMusicVolume(volumeLevel: number)
+	local newTween = TweenService:Create(musicController, TweenInfo.new(1), { Volume = volumeLevel })
+	newTween:Play()
+end
 
 local function setMovementEnabled(enabled: boolean)
 	if enabled then
@@ -36,13 +45,15 @@ local function startEntryCooldown(duration: number)
 end
 
 local function leaveShop()
+	setOtherMusicVolume(1)
 	isInShop = false
 
 	setMovementEnabled(true)
-	startEntryCooldown(5)
+	startEntryCooldown(2)
 end
 
 local function enterLoadout(loadoutModel: Model)
+	setOtherMusicVolume(0)
 	isInShop = true
 	canEnterShop = false
 
@@ -56,6 +67,7 @@ local function enterLoadout(loadoutModel: Model)
 end
 
 local function enterShop(shopModel: Model)
+	setOtherMusicVolume(0)
 	isInShop = true
 	canEnterShop = false
 
